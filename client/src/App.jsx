@@ -456,7 +456,7 @@ function UserWorklogs({ logs, detected, reload }) {
           );
         })}
       </div>
-      <p className="muted small">Puoi inserire e modificare le ore solo per la giornata di oggi. Dalla mezzanotte le ore del giorno si bloccano: dopo di che solo l'amministratore può modificarle. In questo archivio vedi il mese corrente e i due precedenti.</p>
+      <p className="muted small">Puoi inserire e modificare le ore solo per la giornata di oggi. Dalla mezzanotte le ore del giorno si bloccano.</p>
     </div>
   );
 }
