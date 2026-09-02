@@ -178,10 +178,14 @@ function UserCalendar({ cursor, setCursor, reqs, logs, onOpenRequest }) {
   const [dayDetail, setDayDetail] = useState(null);
   // richieste che toccano un dato giorno
   const reqsOnDay = (day) => reqs.filter(r => r.stato!=="respinta" && eachDay(r.data_inizio,r.data_fine).includes(day));
+  // finestra consentita: mese corrente (max) e due mesi indietro (min)
+  const oggiD = new Date();
+  const maxMonth = new Date(oggiD.getFullYear(), oggiD.getMonth(), 1);
+  const minMonth = new Date(oggiD.getFullYear(), oggiD.getMonth()-2, 1);
 
   return (
     <div className="card">
-      <MonthNav cursor={cursor} setCursor={setCursor} />
+      <MonthNav cursor={cursor} setCursor={setCursor} minMonth={minMonth} maxMonth={maxMonth} />
       <CalendarGrid cursor={cursor} onDayClick={(day)=>{ if(events[day]) setDayDetail(day); }} render={(day)=>{
         const ev = events[day]; if (!ev) return null;
         return <div className="daytags">{ev.map((e,i)=>(
@@ -189,6 +193,7 @@ function UserCalendar({ cursor, setCursor, reqs, logs, onOpenRequest }) {
         ))}</div>;
       }} />
       <Legend />
+      <p className="muted small">Il calendario mostra il mese corrente e i due precedenti.</p>
       {dayDetail && (
         <Modal onClose={()=>setDayDetail(null)} title={`Giorno ${fmtDate(dayDetail)}`}>
           {reqsOnDay(dayDetail).length===0 && <div className="muted small">Nessuna richiesta in questo giorno (solo ore lavorate).</div>}
@@ -893,9 +898,18 @@ function Header({ me, onLogout, right, theme, toggleTheme }) {
     </header>
   );
 }
-function MonthNav({ cursor, setCursor }) {
+function MonthNav({ cursor, setCursor, minMonth, maxMonth }) {
   const go = (delta) => { const c = new Date(cursor); c.setMonth(c.getMonth()+delta); setCursor(c); };
-  return (<div className="monthnav"><button className="btn ghost tiny" onClick={()=>go(-1)}>‹</button><span className="monthlabel">{MESI[cursor.getMonth()]} {cursor.getFullYear()}</span><button className="btn ghost tiny" onClick={()=>go(1)}>›</button></div>);
+  // confronto per anno-mese (primo giorno del mese) per capire se una freccia è ammessa
+  const ym = (d) => d.getFullYear()*12 + d.getMonth();
+  const cur = ym(cursor);
+  const canPrev = minMonth ? cur > ym(minMonth) : true;
+  const canNext = maxMonth ? cur < ym(maxMonth) : true;
+  return (<div className="monthnav">
+    <button className="btn ghost tiny" onClick={()=>canPrev&&go(-1)} disabled={!canPrev}>‹</button>
+    <span className="monthlabel">{MESI[cursor.getMonth()]} {cursor.getFullYear()}</span>
+    <button className="btn ghost tiny" onClick={()=>canNext&&go(1)} disabled={!canNext}>›</button>
+  </div>);
 }
 function CalendarGrid({ cursor, render, onDayClick }) {
   const y=cursor.getFullYear(), m=cursor.getMonth();
