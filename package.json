@@ -1,0 +1,23 @@
+{
+  "name": "gestione-ore",
+  "version": "1.0.0",
+  "description": "Gestione presenze, permessi, ferie e assenze",
+  "type": "module",
+  "scripts": {
+    "install:all": "npm install && npm install --prefix client",
+    "build": "npm install --prefix client && npm run build --prefix client",
+    "start": "node server/index.js",
+    "postinstall": "npm install --prefix client"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "exceljs": "^4.4.0",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.12.0"
+  }
+}
