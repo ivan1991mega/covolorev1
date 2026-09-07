@@ -47,6 +47,7 @@ export async function initDb() {
       ore      NUMERIC(5,2) NOT NULL,
       straordinari NUMERIC(5,2) DEFAULT 0,
       cantiere BOOLEAN DEFAULT false,
+      nome_cantiere TEXT DEFAULT '',
       created_at TIMESTAMPTZ DEFAULT now()
     );
 
@@ -82,6 +83,7 @@ export async function initDb() {
   // Migrazione: aggiunge la colonna straordinari se il database è di una versione precedente.
   await pool.query(`ALTER TABLE worklogs ADD COLUMN IF NOT EXISTS straordinari NUMERIC(5,2) DEFAULT 0;`);
   await pool.query(`ALTER TABLE worklogs ADD COLUMN IF NOT EXISTS cantiere BOOLEAN DEFAULT false;`);
+  await pool.query(`ALTER TABLE worklogs ADD COLUMN IF NOT EXISTS nome_cantiere TEXT DEFAULT '';`);
   // Migrazione: aggiunge la colonna archived ai messaggi.
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT false;`);
 
