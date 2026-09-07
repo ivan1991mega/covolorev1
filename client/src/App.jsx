@@ -294,6 +294,7 @@ function PunchClock({ reload }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [cantiere, setCantiere] = useState(false);
+  const [nomeCantiere, setNomeCantiere] = useState("");
 
   const load = useCallback(async () => {
     try { setPunch(await api.get("/api/punch")); } catch { setPunch(null); }
@@ -304,17 +305,24 @@ function PunchClock({ reload }) {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
+  // quando la pausa fissa scade, ricarico lo stato dal server (che la converte in attivo)
+  useEffect(() => {
+    if (punch && punch.stato === "pausa_fissa" && punch.pausa_fine) {
+      if (Date.now() >= new Date(punch.pausa_fine).getTime()) load();
+    }
+  }, [now, punch, load]);
 
   const act = async (path) => {
     setBusy(true); setMsg("");
     try {
-      const body = path === "uscita" ? { cantiere } : undefined;
+      const body = path === "uscita" ? { cantiere, nomeCantiere: cantiere ? nomeCantiere : "" } : undefined;
       const res = await api.post(`/api/punch/${path}`, body);
       if (path === "uscita") {
         setMsg(res.straordinari > 0
           ? `Uscita registrata. Attenzione: ${res.straordinari}h di STRAORDINARIO.`
           : "Uscita registrata.");
         setCantiere(false);
+        setNomeCantiere("");
         await reload();
       }
       await load();
@@ -327,10 +335,18 @@ function PunchClock({ reload }) {
   // calcolo tempo trascorso
   let elapsed = "";
   let straordFlag = false;
+  let countdownPausa = null; // secondi rimanenti se in pausa fissa
   if (punch) {
     const start = new Date(punch.entrata).getTime();
     let pausaMs = (punch.pausa_totale || 0) * 60000;
     if (punch.stato === "in_pausa" && punch.pausa_inizio) pausaMs += now - new Date(punch.pausa_inizio).getTime();
+    if (punch.stato === "pausa_fissa" && punch.pausa_fine) {
+      const fine = new Date(punch.pausa_fine).getTime();
+      const inizioPausa = fine - 150 * 60000;
+      const trascorso = Math.min(now, fine) - inizioPausa; // non oltre la fine
+      pausaMs += Math.max(0, trascorso);
+      countdownPausa = Math.max(0, Math.round((fine - now) / 1000));
+    }
     const workedMs = Math.max(0, now - start - pausaMs);
     const h = Math.floor(workedMs / 3600000);
     const m = Math.floor((workedMs % 3600000) / 60000);
@@ -338,13 +354,15 @@ function PunchClock({ reload }) {
     elapsed = `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
     straordFlag = workedMs > 8 * 3600000;
   }
+  const inPausa = punch && (punch.stato === "in_pausa" || punch.stato === "pausa_fissa");
+  const fmtCountdown = (sec) => `${String(Math.floor(sec/60)).padStart(2,"0")}:${String(sec%60).padStart(2,"0")}`;
 
   return (
     <div className={punch ? "card punchcard active" : "card punchcard"}>
       <div className="punchhead">
         <h3>Timbratura</h3>
-        {punch && <span className={punch.stato==="in_pausa" ? "punchstate pausestate" : "punchstate"}>
-          {punch.stato==="in_pausa" ? "In pausa" : "Al lavoro"}
+        {punch && <span className={inPausa ? "punchstate pausestate" : "punchstate"}>
+          {punch.stato==="in_pausa" ? "In pausa" : punch.stato==="pausa_fissa" ? "Pausa pranzo" : "Al lavoro"}
         </span>}
       </div>
 
@@ -357,14 +375,27 @@ function PunchClock({ reload }) {
         <>
           <div className={straordFlag ? "punchtimer straord" : "punchtimer"}>{elapsed}</div>
           {straordFlag && <div className="straordbanner">Oltre le 8 ore: sei in STRAORDINARIO</div>}
-          <label className="checkfield punchcheck">
-            <input type="checkbox" checked={cantiere} onChange={e=>setCantiere(e.target.checked)} />
-            <span>In cantiere <span className="muted small">(spunta prima di uscire)</span></span>
-          </label>
+          <div className="cantiererow punchcantiere">
+            <label className="checkfield">
+              <input type="checkbox" checked={cantiere} onChange={e=>{ setCantiere(e.target.checked); if(!e.target.checked) setNomeCantiere(""); }} />
+              <span>In cantiere <span className="muted small">(spunta prima di uscire)</span></span>
+            </label>
+            <input type="text" className="nomecantiere" placeholder="Nome del cantiere"
+              value={nomeCantiere} disabled={!cantiere}
+              onChange={e=>setNomeCantiere(e.target.value)} />
+          </div>
+          {punch.stato === "pausa_fissa" && countdownPausa !== null && (
+            <div className="pausacountdown">Pausa pranzo · riprende tra <b>{fmtCountdown(countdownPausa)}</b></div>
+          )}
           <div className="punchbtns">
-            {punch.stato === "attivo"
-              ? <button className="btn" onClick={()=>act("pausa")} disabled={busy}>⏸ Pausa</button>
-              : <button className="btn ok" onClick={()=>act("riprendi")} disabled={busy}>▶ Riprendi</button>}
+            {punch.stato === "attivo" && (
+              <>
+                <button className="btn" onClick={()=>act("pausa")} disabled={busy}>⏸ Pausa</button>
+                <button className="btn" onClick={()=>act("pausa-fissa")} disabled={busy}>🍽 Pausa 150 min</button>
+              </>
+            )}
+            {punch.stato === "in_pausa" && <button className="btn ok" onClick={()=>act("riprendi")} disabled={busy}>▶ Riprendi</button>}
+            {punch.stato === "pausa_fissa" && <button className="btn ok" onClick={()=>act("riprendi")} disabled={busy}>▶ Rientro anticipato</button>}
             <button className="btn danger" onClick={()=>act("uscita")} disabled={busy}>⏹ Uscita</button>
           </div>
           <div className="muted small punchinfo">
@@ -381,12 +412,12 @@ function PunchClock({ reload }) {
 
 function UserWorklogs({ logs, detected, reload }) {
   const oggi = todayISO();
-  const empty = { id:null, data:oggi, inizio:"09:00", fine:"18:00", pausa:"60", straordinari:"0", cantiere:false };
+  const empty = { id:null, data:oggi, inizio:"09:00", fine:"18:00", pausa:"60", straordinari:"0", cantiere:false, nomeCantiere:"" };
   const [f, setF] = useState(empty);
   const [err, setErr] = useState("");
 
   const editing = f.id !== null;
-  const startEdit = (l) => { setErr(""); setF({ id:l.id, data:iso(l.data), inizio:l.inizio, fine:l.fine, pausa:String(l.pausa), straordinari:String(l.straordinari||0), cantiere:!!l.cantiere }); };
+  const startEdit = (l) => { setErr(""); setF({ id:l.id, data:iso(l.data), inizio:l.inizio, fine:l.fine, pausa:String(l.pausa), straordinari:String(l.straordinari||0), cantiere:!!l.cantiere, nomeCantiere:l.nome_cantiere||"" }); };
   const cancel = () => { setErr(""); setF(empty); };
 
   const save = async () => {
@@ -400,7 +431,7 @@ function UserWorklogs({ logs, detected, reload }) {
     const straordAuto = Math.max(0, oreLorde - 8);
     const straord = straordManuale > 0 ? straordManuale : round2(straordAuto);
     const oreDaSalvare = straordManuale > 0 ? round2(oreLorde - straordManuale) : round2(oreNormali);
-    const payload = { data:oggi, inizio:f.inizio, fine:f.fine, pausa:parseInt(f.pausa||"0",10), ore:oreDaSalvare, straordinari:straord, cantiere:f.cantiere };
+    const payload = { data:oggi, inizio:f.inizio, fine:f.fine, pausa:parseInt(f.pausa||"0",10), ore:oreDaSalvare, straordinari:straord, cantiere:f.cantiere, nomeCantiere:f.cantiere?f.nomeCantiere:"" };
     try {
       if (editing) await api.put(`/api/worklogs/${f.id}`, payload);
       else await api.post("/api/worklogs", payload);
@@ -421,10 +452,15 @@ function UserWorklogs({ logs, detected, reload }) {
           <label className="field"><span>Pausa (min)</span><input type="number" min="0" step="15" value={f.pausa} onChange={e=>setF({...f,pausa:e.target.value})} /></label>
           <label className="field"><span>Straordinari (h)</span><input type="number" min="0" step="0.25" value={f.straordinari} onChange={e=>setF({...f,straordinari:e.target.value})} placeholder="auto se >8h" /></label>
         </div>
-        <label className="checkfield">
-          <input type="checkbox" checked={f.cantiere} onChange={e=>setF({...f,cantiere:e.target.checked})} />
-          <span>In cantiere <span className="muted small">(se non spuntato: in sede)</span></span>
-        </label>
+        <div className="cantiererow">
+          <label className="checkfield">
+            <input type="checkbox" checked={f.cantiere} onChange={e=>setF({...f,cantiere:e.target.checked, nomeCantiere:e.target.checked?f.nomeCantiere:""})} />
+            <span>In cantiere <span className="muted small">(se non spuntato: in sede)</span></span>
+          </label>
+          <input type="text" className="nomecantiere" placeholder="Nome del cantiere"
+            value={f.nomeCantiere} disabled={!f.cantiere}
+            onChange={e=>setF({...f,nomeCantiere:e.target.value})} />
+        </div>
         {err && <div className="alert">{err}</div>}
         <div className="rowend">
           {editing && <button className="btn ghost" onClick={cancel}>Annulla</button>}
@@ -441,7 +477,7 @@ function UserWorklogs({ logs, detected, reload }) {
           return (
             <div key={l.id} className="logrow">
               <div className="logdate">{fmtDate(l.data)}</div>
-              <div className="logtimes">{l.inizio}–{l.fine} · pausa {l.pausa}′ {l.cantiere ? <span className="sitetag cantiere">In cantiere</span> : <span className="sitetag sede">In sede</span>}</div>
+              <div className="logtimes">{l.inizio}–{l.fine} · pausa {l.pausa}′ {l.cantiere ? <span className="sitetag cantiere">In cantiere{l.nome_cantiere?`: ${l.nome_cantiere}`:""}</span> : <span className="sitetag sede">In sede</span>}</div>
               <div className="loghours">{round2(Number(l.ore))}h {straord>0 && <span className="straordtag">+{straord}h str.</span>}</div>
               <div className="logcompare">{det ? <span className={diff===0?"cmp ok":"cmp warn"}>Rilevate {round2(Number(det.ore))}h {diff!==0&&`(Δ ${diff>0?"+":""}${diff}h)`}</span> : <span className="muted small">nessun rilevamento</span>}</div>
               <div className="logactions">
@@ -728,13 +764,13 @@ function AdminUserWorklogs({ user, logs, detected, reload }) {
   const [f, setF] = useState(null); // registrazione in modifica
   const [err, setErr] = useState("");
 
-  const startEdit = (l) => { setErr(""); setF({ id:l.id, data:iso(l.data), inizio:l.inizio, fine:l.fine, pausa:String(l.pausa), ore:String(round2(Number(l.ore))), straordinari:String(round2(Number(l.straordinari||0))), cantiere:!!l.cantiere }); };
+  const startEdit = (l) => { setErr(""); setF({ id:l.id, data:iso(l.data), inizio:l.inizio, fine:l.fine, pausa:String(l.pausa), ore:String(round2(Number(l.ore))), straordinari:String(round2(Number(l.straordinari||0))), cantiere:!!l.cantiere, nomeCantiere:l.nome_cantiere||"" }); };
   const cancel = () => { setErr(""); setF(null); };
 
   const save = async () => {
     setErr("");
     if (f.fine<=f.inizio) return setErr("L'orario di fine deve essere dopo l'inizio.");
-    const payload = { data:f.data, inizio:f.inizio, fine:f.fine, pausa:parseInt(f.pausa||"0",10), ore:round2(parseFloat(f.ore||"0")), straordinari:round2(parseFloat(f.straordinari||"0")), cantiere:f.cantiere };
+    const payload = { data:f.data, inizio:f.inizio, fine:f.fine, pausa:parseInt(f.pausa||"0",10), ore:round2(parseFloat(f.ore||"0")), straordinari:round2(parseFloat(f.straordinari||"0")), cantiere:f.cantiere, nomeCantiere:f.cantiere?f.nomeCantiere:"" };
     try { await api.put(`/api/worklogs/${f.id}`, payload); cancel(); reload(); }
     catch(e){ setErr(e.message); }
   };
@@ -759,10 +795,15 @@ function AdminUserWorklogs({ user, logs, detected, reload }) {
             <label className="field"><span>Ore</span><input type="number" min="0" step="0.25" value={f.ore} onChange={e=>setF({...f,ore:e.target.value})} /></label>
             <label className="field"><span>Straordinari (h)</span><input type="number" min="0" step="0.25" value={f.straordinari} onChange={e=>setF({...f,straordinari:e.target.value})} /></label>
           </div>
-          <label className="checkfield">
-            <input type="checkbox" checked={f.cantiere} onChange={e=>setF({...f,cantiere:e.target.checked})} />
-            <span>In cantiere</span>
-          </label>
+          <div className="cantiererow">
+            <label className="checkfield">
+              <input type="checkbox" checked={f.cantiere} onChange={e=>setF({...f,cantiere:e.target.checked, nomeCantiere:e.target.checked?f.nomeCantiere:""})} />
+              <span>In cantiere</span>
+            </label>
+            <input type="text" className="nomecantiere" placeholder="Nome del cantiere"
+              value={f.nomeCantiere} disabled={!f.cantiere}
+              onChange={e=>setF({...f,nomeCantiere:e.target.value})} />
+          </div>
           {err && <div className="alert">{err}</div>}
           <div className="rowend"><button className="btn ghost" onClick={cancel}>Annulla</button><button className="btn primary" onClick={save}>Salva modifiche</button></div>
         </div>
@@ -776,7 +817,7 @@ function AdminUserWorklogs({ user, logs, detected, reload }) {
           return (
             <div key={l.id} className="logrow">
               <div className="logdate">{fmtDate(l.data)}</div>
-              <div className="logtimes">{l.inizio}–{l.fine} · pausa {l.pausa}′ {l.cantiere ? <span className="sitetag cantiere">In cantiere</span> : <span className="sitetag sede">In sede</span>}</div>
+              <div className="logtimes">{l.inizio}–{l.fine} · pausa {l.pausa}′ {l.cantiere ? <span className="sitetag cantiere">In cantiere{l.nome_cantiere?`: ${l.nome_cantiere}`:""}</span> : <span className="sitetag sede">In sede</span>}</div>
               <div className="loghours">{round2(Number(l.ore))}h {straord>0 && <span className="straordtag">+{straord}h str.</span>}</div>
               <div className="logcompare">{det ? <span className={diff===0?"cmp ok":"cmp warn"}>Rilevate {round2(Number(det.ore))}h {diff!==0&&`(Δ ${diff>0?"+":""}${diff}h)`}</span> : <span className="muted small">nessun rilevamento</span>}</div>
               <div className="logactions">
@@ -1221,6 +1262,8 @@ h3{ font-size:16px; margin:0 0 10px; }
 .punchhead h3{ margin:0; }
 .punchstate{ font-size:12px; font-weight:700; padding:3px 10px; border-radius:20px; background:var(--panel2); color:var(--accent-ink); border:1px solid var(--line); }
 .punchstate.pausestate{ color:#b3701c; }
+.pausacountdown{ background:#f7ecd9; color:#8a5410; font-weight:600; font-size:14px; padding:8px 14px; border-radius:9px; margin:10px auto; display:inline-block; }
+:root[data-theme="dark"] .pausacountdown{ background:#3a3020; color:#e8c58a; }
 .punchtimer{ font-size:44px; font-weight:800; letter-spacing:.02em; font-variant-numeric:tabular-nums; margin:10px 0; color:var(--ink); }
 .punchtimer.straord{ color:#b3701c; }
 .straordbanner{ background:#f7ecd9; color:#8a5410; font-weight:700; font-size:13px; padding:8px 12px; border-radius:9px; margin-bottom:12px; display:inline-block; }
@@ -1290,6 +1333,12 @@ h3{ font-size:16px; margin:0 0 10px; }
 .straordtag{ font-size:11px; font-weight:700; color:#b3701c; background:#f7ecd9; padding:2px 7px; border-radius:20px; margin-left:6px; }
 .checkfield{ display:flex; align-items:center; gap:8px; font-size:14px; font-weight:600; color:var(--ink); margin:4px 0 12px; cursor:pointer; }
 .checkfield input[type=checkbox]{ width:18px; height:18px; accent-color:var(--accent); cursor:pointer; }
+.cantiererow{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:4px 0 12px; }
+.cantiererow .checkfield{ margin:0; }
+.punchcantiere{ justify-content:center; }
+.nomecantiere{ flex:1; min-width:160px; border:1px solid var(--line); border-radius:10px; padding:9px 12px; font-size:14px; font-family:inherit; color:var(--ink); background:var(--panel); font-weight:500; }
+.nomecantiere:focus{ outline:2px solid var(--accent); border-color:transparent; }
+.nomecantiere:disabled{ opacity:.5; cursor:not-allowed; background:var(--panel2); }
 .punchcheck{ justify-content:center; margin:12px 0; }
 .sitetag{ font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:20px; margin-left:4px; }
 .sitetag.cantiere{ background:#e0ebf4; color:#2b5f8a; }
