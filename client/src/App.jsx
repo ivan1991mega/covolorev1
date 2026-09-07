@@ -715,6 +715,49 @@ function TeamCalendar({ reqs, cursor, setCursor }) {
   );
 }
 
+// Box per esportare l'Excel dettagliato di un singolo utente (mese corrente o 2 precedenti).
+function UserExportBox({ user }) {
+  // costruisco le 3 opzioni: mese corrente e due precedenti
+  const opzioni = useMemo(() => {
+    const oggi = new Date();
+    const out = [];
+    for (let i = 0; i < 3; i++) {
+      const d = new Date(oggi.getFullYear(), oggi.getMonth() - i, 1);
+      out.push({ year: d.getFullYear(), month: d.getMonth() + 1, label: `${MESI[d.getMonth()]} ${d.getFullYear()}` });
+    }
+    return out;
+  }, []);
+  const [sel, setSel] = useState(`${opzioni[0].year}-${opzioni[0].month}`);
+  const [busy, setBusy] = useState(false);
+
+  const esporta = async () => {
+    setBusy(true);
+    const [y, m] = sel.split("-").map(Number);
+    try {
+      await api.download(`/api/export-user/${user.id}?year=${y}&month=${m}`,
+        `${user.name.replace(/[^a-zA-Z0-9]/g,"_")}_${y}_${String(m).padStart(2,"0")}.xlsx`);
+    } catch(e){ alert(e.message); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="card">
+      <div className="rowbetween">
+        <h3>Esporta riepilogo Excel</h3>
+        <div className="filterrow">
+          <label className="field inlinefilter"><span>Mese</span>
+            <select value={sel} onChange={e=>setSel(e.target.value)}>
+              {opzioni.map(o=><option key={`${o.year}-${o.month}`} value={`${o.year}-${o.month}`}>{o.label}</option>)}
+            </select>
+          </label>
+          <button className="btn primary" onClick={esporta} disabled={busy}>{busy?"Genero…":"⭳ Esporta"}</button>
+        </div>
+      </div>
+      <p className="muted small">Genera un Excel con due fogli: le rilevazioni ore del mese (con data di registrazione e ultima modifica) e tutte le richieste con data, ora ed esito.</p>
+    </div>
+  );
+}
+
 function AdminUsers({ users, reqs, logs, detected, selected, setSelected, cursor, setCursor, reload }) {
   if (selected) {
     const u = users.find(x=>x.id===selected);
@@ -725,6 +768,7 @@ function AdminUsers({ users, reqs, logs, detected, selected, setSelected, cursor
       <div className="stack">
         <button className="btn ghost" onClick={()=>setSelected(null)}>← Tutti gli utenti</button>
         <div className="rowbetween"><h2>{u.name}</h2><span className="muted">{u.email}</span></div>
+        <UserExportBox user={u} />
         <MonthlySummary reqs={uReqs} logs={uLogs} detected={uDet} cursor={cursor} setCursor={setCursor} showCompare />
         <AdminUserWorklogs user={u} logs={uLogs} detected={uDet} reload={reload} />
         <div className="card">
