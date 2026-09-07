@@ -441,7 +441,7 @@ app.put("/api/worklogs/:id", auth, async (req, res) => {
       return res.status(403).json({ error: "Puoi impostare solo la data di oggi." });
     }
     const { rows: upd } = await pool.query(
-      `UPDATE worklogs SET data=$1, inizio=$2, fine=$3, pausa=$4, ore=$5, straordinari=$6, cantiere=$7, nome_cantiere=$8
+      `UPDATE worklogs SET data=$1, inizio=$2, fine=$3, pausa=$4, ore=$5, straordinari=$6, cantiere=$7, nome_cantiere=$8, updated_at=now()
        WHERE id=$9 RETURNING *`,
       [data, inizio, fine, Number(pausa || 0), Number(ore), Number(straordinari || 0), !!cantiere,
        cantiere ? String(nomeCantiere || "").trim() : "", req.params.id]
@@ -612,6 +612,101 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Errore nella generazione del file Excel." });
+  }
+});
+
+// Export dettagliato di UN singolo utente (mese scelto): due fogli — rilevazioni e richieste.
+app.get("/api/export-user/:userId", auth, adminOnly, async (req, res) => {
+  const userId = Number(req.params.userId);
+  const year = Number(req.query.year) || new Date().getFullYear();
+  const month = Number(req.query.month) || (new Date().getMonth() + 1);
+  const inMonth = (v) => { const s = toISO(v); return Number(s.slice(0,4)) === year && Number(s.slice(5,7)) === month; };
+
+  // formatta un timestamp in "GG/MM/AAAA HH:MM" ora italiana
+  const fmtDT = (v) => {
+    if (!v) return "";
+    const d = (v instanceof Date) ? v : new Date(v);
+    if (isNaN(d)) return "";
+    return new Intl.DateTimeFormat("it-IT", {
+      timeZone: "Europe/Rome", day: "2-digit", month: "2-digit", year: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    }).format(d).replace(",", "");
+  };
+  const fmtD = (v) => { const s = toISO(v); if (!s) return ""; const [y,m,d]=s.split("-"); return `${d}/${m}/${y}`; };
+
+  try {
+    const us = (await pool.query("SELECT name, email FROM users WHERE id=$1", [userId])).rows[0];
+    if (!us) return res.status(404).json({ error: "Utente non trovato." });
+
+    const worklogs = (await pool.query("SELECT * FROM worklogs WHERE user_id=$1 ORDER BY data", [userId])).rows
+      .filter(w => inMonth(w.data));
+    const requests = (await pool.query("SELECT * FROM requests WHERE user_id=$1 ORDER BY created_at", [userId])).rows;
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "Gestione ore";
+    const mm = String(month).padStart(2,"0");
+
+    const headStyle = (row) => {
+      row.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      row.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF3A7D6B" } };
+    };
+
+    // --- Foglio 1: Rilevazioni ore ---
+    const ws1 = wb.addWorksheet("Rilevazioni ore");
+    ws1.columns = [
+      { header: "Data", key: "data", width: 12 },
+      { header: "Entrata", key: "inizio", width: 10 },
+      { header: "Uscita", key: "fine", width: 10 },
+      { header: "Pausa (min)", key: "pausa", width: 12 },
+      { header: "Ore", key: "ore", width: 10 },
+      { header: "Straordinari", key: "straord", width: 12 },
+      { header: "Cantiere", key: "cantiere", width: 10 },
+      { header: "Nome cantiere", key: "nomecant", width: 24 },
+      { header: "Registrata il", key: "creata", width: 20 },
+      { header: "Ultima modifica", key: "modificata", width: 20 },
+    ];
+    headStyle(ws1.getRow(1));
+    worklogs.forEach(w => {
+      ws1.addRow({
+        data: fmtD(w.data), inizio: w.inizio, fine: w.fine, pausa: w.pausa,
+        ore: Number(w.ore), straord: Number(w.straordinari || 0),
+        cantiere: w.cantiere ? "Sì" : "No", nomecant: w.nome_cantiere || "",
+        creata: fmtDT(w.created_at), modificata: fmtDT(w.updated_at || w.created_at),
+      });
+    });
+    if (worklogs.length === 0) ws1.addRow({ data: "Nessuna rilevazione nel mese" });
+
+    // --- Foglio 2: Richieste ---
+    const ws2 = wb.addWorksheet("Richieste");
+    ws2.columns = [
+      { header: "Tipo", key: "tipo", width: 14 },
+      { header: "Modalità", key: "mode", width: 12 },
+      { header: "Dal", key: "dal", width: 18 },
+      { header: "Al", key: "al", width: 14 },
+      { header: "Richiesta il", key: "richiesta", width: 20 },
+      { header: "Esito", key: "esito", width: 14 },
+    ];
+    headStyle(ws2.getRow(1));
+    const tipoLabel = { permesso: "Permesso", ferie: "Ferie", assenza: "Assenza" };
+    const statoLabel = { in_attesa: "In attesa", approvata: "Approvata", respinta: "Respinta" };
+    requests.forEach(r => {
+      const dal = r.mode === "ore" ? `${fmtD(r.data_inizio)} ${r.ora_inizio}-${r.ora_fine}` : fmtD(r.data_inizio);
+      const al = r.mode === "ore" ? "" : fmtD(r.data_fine);
+      ws2.addRow({
+        tipo: tipoLabel[r.tipo] || r.tipo, mode: r.mode === "ore" ? "Oraria" : "Giornaliera",
+        dal, al, richiesta: fmtDT(r.created_at), esito: statoLabel[r.stato] || r.stato,
+      });
+    });
+    if (requests.length === 0) ws2.addRow({ tipo: "Nessuna richiesta" });
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    const safeName = us.name.replace(/[^a-zA-Z0-9]/g, "_");
+    res.setHeader("Content-Disposition", `attachment; filename="${safeName}_${year}_${mm}.xlsx"`);
+    await wb.xlsx.write(res);
+    res.end();
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Errore nella generazione del file Excel utente." });
   }
 });
 
