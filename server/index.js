@@ -225,10 +225,26 @@ function hhmmFromDate(d) {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+const PAUSA_FISSA_MIN = 150; // durata fissa della pausa pranzo
+
+// Se una pausa fissa è scaduta, la converte in minuti accumulati e rimette "attivo".
+// Restituisce la riga punch aggiornata. Va chiamata prima di leggere/usare lo stato.
+async function normalizzaPausaFissa(p) {
+  if (p && p.stato === "pausa_fissa" && p.pausa_fine && Date.now() >= new Date(p.pausa_fine).getTime()) {
+    const { rows } = await pool.query(
+      "UPDATE punch SET stato='attivo', pausa_fine=NULL, pausa_totale=pausa_totale+$2 WHERE user_id=$1 RETURNING *",
+      [p.user_id, PAUSA_FISSA_MIN]
+    );
+    return rows[0];
+  }
+  return p;
+}
+
 // Stato della timbratura in corso
 app.get("/api/punch", auth, async (req, res) => {
   const { rows } = await pool.query("SELECT * FROM punch WHERE user_id=$1", [req.user.id]);
-  res.json(rows[0] || null);
+  const p = await normalizzaPausaFissa(rows[0]);
+  res.json(p || null);
 });
 
 // Entrata: crea una sessione
@@ -258,19 +274,50 @@ app.post("/api/punch/pausa", auth, async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ error: "Errore nella pausa." }); }
 });
 
-// Riprendi: chiude la pausa e somma i minuti
+// Pausa fissa: ferma il conteggio per un tempo fisso (150 min), riprende da sola allo scadere.
+app.post("/api/punch/pausa-fissa", auth, async (req, res) => {
+  try {
+    const { rows } = await pool.query("SELECT * FROM punch WHERE user_id=$1", [req.user.id]);
+    let p = await normalizzaPausaFissa(rows[0]);
+    if (!p) return res.status(400).json({ error: "Nessuna timbratura in corso." });
+    if (p.stato === "in_pausa") return res.status(400).json({ error: "Sei già in pausa manuale." });
+    if (p.stato === "pausa_fissa") return res.status(400).json({ error: "Pausa fissa già in corso." });
+    const { rows: upd } = await pool.query(
+      `UPDATE punch SET stato='pausa_fissa', pausa_fine = now() + ($2 || ' minutes')::interval
+       WHERE user_id=$1 RETURNING *`,
+      [req.user.id, String(PAUSA_FISSA_MIN)]
+    );
+    res.json(upd[0]);
+  } catch (e) { console.error(e); res.status(500).json({ error: "Errore nell'avvio della pausa fissa." }); }
+});
+
+// Riprendi: chiude la pausa (manuale o fissa) e somma i minuti effettivi
 app.post("/api/punch/riprendi", auth, async (req, res) => {
   try {
     const { rows } = await pool.query("SELECT * FROM punch WHERE user_id=$1", [req.user.id]);
-    const p = rows[0];
+    let p = await normalizzaPausaFissa(rows[0]);
     if (!p) return res.status(400).json({ error: "Nessuna timbratura in corso." });
-    if (p.stato !== "in_pausa") return res.status(400).json({ error: "Non sei in pausa." });
-    const minutiPausa = Math.round((Date.now() - new Date(p.pausa_inizio).getTime()) / 60000);
-    const { rows: upd } = await pool.query(
-      "UPDATE punch SET stato='attivo', pausa_inizio=NULL, pausa_totale=pausa_totale+$2 WHERE user_id=$1 RETURNING *",
-      [req.user.id, minutiPausa]
-    );
-    res.json(upd[0]);
+    // se la pausa fissa è appena scaduta, normalizzaPausaFissa l'ha già chiusa
+    if (p.stato === "attivo") return res.json(p);
+    if (p.stato === "in_pausa") {
+      const minutiPausa = Math.round((Date.now() - new Date(p.pausa_inizio).getTime()) / 60000);
+      const { rows: upd } = await pool.query(
+        "UPDATE punch SET stato='attivo', pausa_inizio=NULL, pausa_totale=pausa_totale+$2 WHERE user_id=$1 RETURNING *",
+        [req.user.id, minutiPausa]
+      );
+      return res.json(upd[0]);
+    }
+    if (p.stato === "pausa_fissa") {
+      // rientro anticipato: conto i minuti realmente trascorsi (pausa_fine - 150min = inizio pausa)
+      const inizioPausa = new Date(p.pausa_fine).getTime() - PAUSA_FISSA_MIN * 60000;
+      const minutiPausa = Math.max(0, Math.round((Date.now() - inizioPausa) / 60000));
+      const { rows: upd } = await pool.query(
+        "UPDATE punch SET stato='attivo', pausa_fine=NULL, pausa_totale=pausa_totale+$2 WHERE user_id=$1 RETURNING *",
+        [req.user.id, minutiPausa]
+      );
+      return res.json(upd[0]);
+    }
+    res.status(400).json({ error: "Non sei in pausa." });
   } catch (e) { console.error(e); res.status(500).json({ error: "Errore nel riprendere." }); }
 });
 
@@ -283,9 +330,18 @@ app.post("/api/punch/uscita", auth, async (req, res) => {
 
     const now = new Date();
     let pausaMin = p.pausa_totale || 0;
-    // se esce mentre è ancora in pausa, chiude anche quella
+    // se esce mentre è ancora in pausa manuale, chiude anche quella
     if (p.stato === "in_pausa" && p.pausa_inizio) {
       pausaMin += Math.round((now.getTime() - new Date(p.pausa_inizio).getTime()) / 60000);
+    }
+    // se esce durante una pausa fissa: se è scaduta conta 150 min pieni, altrimenti i minuti trascorsi
+    if (p.stato === "pausa_fissa" && p.pausa_fine) {
+      const inizioPausa = new Date(p.pausa_fine).getTime() - PAUSA_FISSA_MIN * 60000;
+      if (now.getTime() >= new Date(p.pausa_fine).getTime()) {
+        pausaMin += PAUSA_FISSA_MIN;
+      } else {
+        pausaMin += Math.max(0, Math.round((now.getTime() - inizioPausa) / 60000));
+      }
     }
 
     const entrata = new Date(p.entrata);
