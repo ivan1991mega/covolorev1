@@ -74,9 +74,10 @@ export async function initDb() {
     CREATE TABLE IF NOT EXISTS punch (
       user_id       INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
       entrata       TIMESTAMPTZ NOT NULL,        -- momento dell'entrata
-      stato         TEXT NOT NULL DEFAULT 'attivo', -- attivo | in_pausa
+      stato         TEXT NOT NULL DEFAULT 'attivo', -- attivo | in_pausa | pausa_fissa
       pausa_totale  INTEGER DEFAULT 0,           -- minuti di pausa già accumulati
-      pausa_inizio  TIMESTAMPTZ                  -- se in pausa, quando è iniziata
+      pausa_inizio  TIMESTAMPTZ,                 -- se in pausa manuale, quando è iniziata
+      pausa_fine    TIMESTAMPTZ                  -- se in pausa fissa, quando riprende in automatico
     );
   `);
 
@@ -86,6 +87,8 @@ export async function initDb() {
   await pool.query(`ALTER TABLE worklogs ADD COLUMN IF NOT EXISTS nome_cantiere TEXT DEFAULT '';`);
   // Migrazione: aggiunge la colonna archived ai messaggi.
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT false;`);
+  // Migrazione: colonna per la pausa fissa a conto alla rovescia.
+  await pool.query(`ALTER TABLE punch ADD COLUMN IF NOT EXISTS pausa_fine TIMESTAMPTZ;`);
 
   // Seed admin se il database è vuoto.
   const { rows } = await pool.query("SELECT COUNT(*)::int AS n FROM users");
