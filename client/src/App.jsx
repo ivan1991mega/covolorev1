@@ -22,13 +22,28 @@ const STATI = {
 
 // ---------- utilità ----------
 const todayISO = () => new Date().toISOString().slice(0, 10);
-const iso = (v) => (v ? String(v).slice(0, 10) : "");
+const iso = (v) => {
+  if (!v) return "";
+  if (v instanceof Date) {
+    const y = v.getFullYear(), m = String(v.getMonth()+1).padStart(2,"0"), d = String(v.getDate()).padStart(2,"0");
+    return `${y}-${m}-${d}`;
+  }
+  return String(v).slice(0, 10);
+};
 const fmtDate = (v) => { const s = iso(v); if (!s) return ""; const [y,m,d]=s.split("-"); return `${d}/${m}/${y}`; };
 const isFuture = (v) => iso(v) >= todayISO();
 const round2 = (n) => Math.round(n * 100) / 100;
 const initials = (name) => name.split(" ").map(w=>w[0]).slice(0,2).join("").toUpperCase();
 function hoursBetween(a,b){ const [h1,m1]=a.split(":").map(Number),[h2,m2]=b.split(":").map(Number); return ((h2*60+m2)-(h1*60+m1))/60; }
-function eachDay(start,end){ const out=[]; let d=new Date(iso(start)), e=new Date(iso(end)); while(d<=e){ out.push(d.toISOString().slice(0,10)); d.setDate(d.getDate()+1);} return out; }
+function eachDay(start,end){
+  const out=[]; let d=new Date(iso(start)+"T00:00:00"), e=new Date(iso(end)+"T00:00:00");
+  while(d<=e){
+    const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,"0"), dd=String(d.getDate()).padStart(2,"0");
+    out.push(`${y}-${m}-${dd}`);
+    d.setDate(d.getDate()+1);
+  }
+  return out;
+}
 function canEdit(r){ return r.stato==="in_attesa" && isFuture(r.data_inizio); }
 function describeReq(r){
   if (r.mode==="ore") return `${fmtDate(r.data_inizio)} · ${r.ora_inizio}–${r.ora_fine}`;
@@ -297,8 +312,20 @@ function PunchClock({ reload }) {
   const [nomeCantiere, setNomeCantiere] = useState("");
 
   const load = useCallback(async () => {
-    try { setPunch(await api.get("/api/punch")); } catch { setPunch(null); }
-  }, []);
+    try {
+      const p = await api.get("/api/punch");
+      if (p && p.autoStopped) {
+        // il server ha chiuso in automatico la timbratura raggiunte le 12 ore
+        setPunch(null);
+        setMsg(p.straordinari > 0
+          ? `Timbratura chiusa in automatico al raggiungimento delle 12 ore (${p.straordinari}h di straordinario). Controlla le ore registrate.`
+          : "Timbratura chiusa in automatico al raggiungimento delle 12 ore.");
+        await reload();
+      } else {
+        setPunch(p);
+      }
+    } catch { setPunch(null); }
+  }, [reload]);
   useEffect(() => { load(); }, [load]);
   // aggiorna il cronometro ogni secondo mentre è attivo
   useEffect(() => {
@@ -310,6 +337,20 @@ function PunchClock({ reload }) {
     if (punch && punch.stato === "pausa_fissa" && punch.pausa_fine) {
       if (Date.now() >= new Date(punch.pausa_fine).getTime()) load();
     }
+  }, [now, punch, load]);
+  // controllo auto-stop 12 ore: se la sessione è aperta, verifico col server
+  // il lavoro effettivo e lascio che il server chiuda quando supera le 12h.
+  useEffect(() => {
+    if (!punch || !punch.entrata) return;
+    const entrata = new Date(punch.entrata).getTime();
+    let pausaMs = (punch.pausa_totale || 0) * 60000;
+    if (punch.stato === "in_pausa" && punch.pausa_inizio) pausaMs += now - new Date(punch.pausa_inizio).getTime();
+    if (punch.stato === "pausa_fissa" && punch.pausa_fine) {
+      const inizioPausa = new Date(punch.pausa_fine).getTime() - 150*60000;
+      pausaMs += Math.max(0, Math.min(now, new Date(punch.pausa_fine).getTime()) - inizioPausa);
+    }
+    const lavoroMs = now - entrata - pausaMs;
+    if (lavoroMs >= 12 * 3600000) load(); // raggiunte 12h → chiedo al server di chiudere
   }, [now, punch, load]);
 
   const act = async (path) => {
