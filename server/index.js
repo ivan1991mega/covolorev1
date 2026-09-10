@@ -240,11 +240,73 @@ async function normalizzaPausaFissa(p) {
   return p;
 }
 
+const MAX_ORE_LAVORO = 12; // stop automatico raggiunte 12 ore di lavoro effettivo
+
+// Calcola i minuti di pausa totali di una sessione a un dato istante.
+function minutiPausaFinora(p, at) {
+  let pausaMin = p.pausa_totale || 0;
+  if (p.stato === "in_pausa" && p.pausa_inizio) {
+    pausaMin += Math.round((at - new Date(p.pausa_inizio).getTime()) / 60000);
+  }
+  if (p.stato === "pausa_fissa" && p.pausa_fine) {
+    const inizioPausa = new Date(p.pausa_fine).getTime() - PAUSA_FISSA_MIN * 60000;
+    if (at >= new Date(p.pausa_fine).getTime()) pausaMin += PAUSA_FISSA_MIN;
+    else pausaMin += Math.max(0, Math.round((at - inizioPausa) / 60000));
+  }
+  return pausaMin;
+}
+
+// Chiude una sessione punch creando il worklog. fineDate = momento di uscita.
+async function chiudiTimbratura(p, fineDate, extra = {}) {
+  const pausaMin = minutiPausaFinora(p, fineDate.getTime());
+  const entrata = new Date(p.entrata);
+  const inizioHHMM = roundQuarter(hhmmFromDate(entrata));
+  const fineHHMM = roundQuarter(hhmmFromDate(fineDate));
+  const pausaArr = Math.round(pausaMin / 15) * 15;
+  const [hi, mi] = inizioHHMM.split(":").map(Number);
+  const [hf, mf] = fineHHMM.split(":").map(Number);
+  let minuti = (hf * 60 + mf) - (hi * 60 + mi) - pausaArr;
+  if (minuti < 0) minuti = 0;
+  const oreTotali = minuti / 60;
+  const oreNormali = Math.min(oreTotali, 8);
+  const straordinari = Math.max(0, oreTotali - 8);
+  const dataISO = `${entrata.getFullYear()}-${String(entrata.getMonth()+1).padStart(2,"0")}-${String(entrata.getDate()).padStart(2,"0")}`;
+  const cantiere = !!extra.cantiere;
+  const nomeCantiere = cantiere ? String(extra.nomeCantiere || "").trim() : "";
+  const { rows: log } = await pool.query(
+    `INSERT INTO worklogs (user_id, data, inizio, fine, pausa, ore, straordinari, cantiere, nome_cantiere)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [p.user_id, dataISO, inizioHHMM, fineHHMM, pausaArr,
+     Math.round(oreNormali*100)/100, Math.round(straordinari*100)/100, cantiere, nomeCantiere]
+  );
+  await pool.query("DELETE FROM punch WHERE user_id=$1", [p.user_id]);
+  return { worklog: log[0], straordinari: Math.round(straordinari*100)/100 };
+}
+
+// Se il lavoro effettivo ha raggiunto le 12 ore, chiude in automatico la sessione
+// fissando l'uscita al momento esatto del raggiungimento (entrata + 12h lavoro + pause).
+async function autoStop12h(p) {
+  if (!p) return { punch: p, autoStopped: false };
+  const now = Date.now();
+  const entrata = new Date(p.entrata).getTime();
+  const pausaMs = minutiPausaFinora(p, now) * 60000;
+  const lavoroMs = now - entrata - pausaMs;
+  if (lavoroMs >= MAX_ORE_LAVORO * 3600000) {
+    // istante in cui sono maturate esattamente 12h di lavoro
+    const istanteStop = new Date(entrata + pausaMs + MAX_ORE_LAVORO * 3600000);
+    const res = await chiudiTimbratura(p, istanteStop);
+    return { punch: null, autoStopped: true, ...res };
+  }
+  return { punch: p, autoStopped: false };
+}
+
 // Stato della timbratura in corso
 app.get("/api/punch", auth, async (req, res) => {
   const { rows } = await pool.query("SELECT * FROM punch WHERE user_id=$1", [req.user.id]);
-  const p = await normalizzaPausaFissa(rows[0]);
-  res.json(p || null);
+  let p = await normalizzaPausaFissa(rows[0]);
+  const auto = await autoStop12h(p);
+  if (auto.autoStopped) return res.json({ autoStopped: true, straordinari: auto.straordinari });
+  res.json(auto.punch || null);
 });
 
 // Entrata: crea una sessione
@@ -327,50 +389,8 @@ app.post("/api/punch/uscita", auth, async (req, res) => {
     const { rows } = await pool.query("SELECT * FROM punch WHERE user_id=$1", [req.user.id]);
     const p = rows[0];
     if (!p) return res.status(400).json({ error: "Nessuna timbratura in corso." });
-
-    const now = new Date();
-    let pausaMin = p.pausa_totale || 0;
-    // se esce mentre è ancora in pausa manuale, chiude anche quella
-    if (p.stato === "in_pausa" && p.pausa_inizio) {
-      pausaMin += Math.round((now.getTime() - new Date(p.pausa_inizio).getTime()) / 60000);
-    }
-    // se esce durante una pausa fissa: se è scaduta conta 150 min pieni, altrimenti i minuti trascorsi
-    if (p.stato === "pausa_fissa" && p.pausa_fine) {
-      const inizioPausa = new Date(p.pausa_fine).getTime() - PAUSA_FISSA_MIN * 60000;
-      if (now.getTime() >= new Date(p.pausa_fine).getTime()) {
-        pausaMin += PAUSA_FISSA_MIN;
-      } else {
-        pausaMin += Math.max(0, Math.round((now.getTime() - inizioPausa) / 60000));
-      }
-    }
-
-    const entrata = new Date(p.entrata);
-    const inizioHHMM = roundQuarter(hhmmFromDate(entrata));
-    const fineHHMM = roundQuarter(hhmmFromDate(now));
-    // arrotonda anche la pausa al quarto d'ora
-    const pausaArr = Math.round(pausaMin / 15) * 15;
-
-    // ore lavorate = (fine - inizio) - pausa
-    const [hi, mi] = inizioHHMM.split(":").map(Number);
-    const [hf, mf] = fineHHMM.split(":").map(Number);
-    let minuti = (hf * 60 + mf) - (hi * 60 + mi) - pausaArr;
-    if (minuti < 0) minuti = 0;
-    const oreTotali = minuti / 60;
-    const oreNormali = Math.min(oreTotali, 8);
-    const straordinari = Math.max(0, oreTotali - 8);
-
-    const dataISO = `${entrata.getFullYear()}-${String(entrata.getMonth()+1).padStart(2,"0")}-${String(entrata.getDate()).padStart(2,"0")}`;
-    const cantiere = !!req.body.cantiere;
-    const nomeCantiere = cantiere ? String(req.body.nomeCantiere || "").trim() : "";
-
-    const { rows: log } = await pool.query(
-      `INSERT INTO worklogs (user_id, data, inizio, fine, pausa, ore, straordinari, cantiere, nome_cantiere)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [req.user.id, dataISO, inizioHHMM, fineHHMM, pausaArr,
-       Math.round(oreNormali*100)/100, Math.round(straordinari*100)/100, cantiere, nomeCantiere]
-    );
-    await pool.query("DELETE FROM punch WHERE user_id=$1", [req.user.id]);
-    res.json({ worklog: log[0], straordinari: Math.round(straordinari*100)/100 });
+    const result = await chiudiTimbratura(p, new Date(), { cantiere: req.body.cantiere, nomeCantiere: req.body.nomeCantiere });
+    res.json(result);
   } catch (e) { console.error(e); res.status(500).json({ error: "Errore nell'uscita." }); }
 });
 
