@@ -453,26 +453,58 @@ function PunchClock({ reload }) {
 
 function UserWorklogs({ logs, detected, reload }) {
   const oggi = todayISO();
-  const empty = { id:null, data:oggi, inizio:"09:00", fine:"18:00", pausa:"60", straordinari:"0", cantiere:false, nomeCantiere:"" };
+  const empty = { id:null, data:oggi, modo:"unico",
+    inizio:"09:00", fine:"18:00", pausa:"60", straordinari:"0",
+    mattinoInizio:"08:00", mattinoFine:"12:00", pomeriggioInizio:"13:00", pomeriggioFine:"17:00",
+    oreTotali:"8", cantiere:false, nomeCantiere:"" };
   const [f, setF] = useState(empty);
   const [err, setErr] = useState("");
 
   const editing = f.id !== null;
-  const startEdit = (l) => { setErr(""); setF({ id:l.id, data:iso(l.data), inizio:l.inizio, fine:l.fine, pausa:String(l.pausa), straordinari:String(l.straordinari||0), cantiere:!!l.cantiere, nomeCantiere:l.nome_cantiere||"" }); };
+  const startEdit = (l) => {
+    setErr("");
+    // deduco la modalità: se ci sono le fasce salvate → fasce, altrimenti orario unico
+    const haFasce = l.mattino_inizio || l.pomeriggio_inizio;
+    setF({ id:l.id, data:iso(l.data), modo: haFasce ? "fasce" : "unico",
+      inizio:l.inizio, fine:l.fine, pausa:String(l.pausa), straordinari:String(l.straordinari||0),
+      mattinoInizio:l.mattino_inizio||"08:00", mattinoFine:l.mattino_fine||"12:00",
+      pomeriggioInizio:l.pomeriggio_inizio||"13:00", pomeriggioFine:l.pomeriggio_fine||"17:00",
+      oreTotali:String(round2(Number(l.ore)+Number(l.straordinari||0))),
+      cantiere:!!l.cantiere, nomeCantiere:l.nome_cantiere||"" });
+  };
   const cancel = () => { setErr(""); setF(empty); };
+
+  // split ordinario/straordinario a soglia 8h
+  const splitOre = (oreLorde) => ({ ore: round2(Math.min(oreLorde,8)), straord: round2(Math.max(0, oreLorde-8)) });
 
   const save = async () => {
     setErr("");
-    if (f.fine<=f.inizio) return setErr("L'orario di fine deve essere dopo l'inizio.");
-    const oreLorde = hoursBetween(f.inizio, f.fine) - (parseInt(f.pausa||"0",10)/60);
-    if (oreLorde<=0) return setErr("La pausa è più lunga del turno.");
-    // straordinario automatico oltre le 8 ore; l'utente può comunque forzare un valore
-    const straordManuale = parseFloat(f.straordinari||"0");
-    const oreNormali = Math.min(oreLorde, 8);
-    const straordAuto = Math.max(0, oreLorde - 8);
-    const straord = straordManuale > 0 ? straordManuale : round2(straordAuto);
-    const oreDaSalvare = straordManuale > 0 ? round2(oreLorde - straordManuale) : round2(oreNormali);
-    const payload = { data:oggi, inizio:f.inizio, fine:f.fine, pausa:parseInt(f.pausa||"0",10), ore:oreDaSalvare, straordinari:straord, cantiere:f.cantiere, nomeCantiere:f.cantiere?f.nomeCantiere:"" };
+    let oreLorde, payloadFasce = { mattinoInizio:"", mattinoFine:"", pomeriggioInizio:"", pomeriggioFine:"" };
+    let inizio = f.inizio, fine = f.fine, pausa = parseInt(f.pausa||"0",10);
+
+    if (f.modo === "unico") {
+      if (f.fine<=f.inizio) return setErr("L'orario di fine deve essere dopo l'inizio.");
+      oreLorde = hoursBetween(f.inizio, f.fine) - (pausa/60);
+      if (oreLorde<=0) return setErr("La pausa è più lunga del turno.");
+    } else if (f.modo === "fasce") {
+      if (f.mattinoFine<=f.mattinoInizio) return setErr("L'uscita mattino deve essere dopo l'entrata.");
+      if (f.pomeriggioFine<=f.pomeriggioInizio) return setErr("L'uscita pomeriggio deve essere dopo l'entrata.");
+      const oreMatt = hoursBetween(f.mattinoInizio, f.mattinoFine);
+      const orePom = hoursBetween(f.pomeriggioInizio, f.pomeriggioFine);
+      oreLorde = oreMatt + orePom;
+      if (oreLorde<=0) return setErr("Le fasce non danno ore valide.");
+      inizio = f.mattinoInizio; fine = f.pomeriggioFine; pausa = 0;
+      payloadFasce = { mattinoInizio:f.mattinoInizio, mattinoFine:f.mattinoFine, pomeriggioInizio:f.pomeriggioInizio, pomeriggioFine:f.pomeriggioFine };
+    } else { // totale diretto
+      oreLorde = parseFloat(String(f.oreTotali).replace(",","."));
+      if (isNaN(oreLorde) || oreLorde<=0) return setErr("Inserisci un totale ore valido (es. 11,5).");
+      if (oreLorde>24) return setErr("Il totale non può superare 24 ore.");
+      inizio = ""; fine = ""; pausa = 0;
+    }
+
+    const { ore, straord } = splitOre(oreLorde);
+    const payload = { data:oggi, inizio, fine, pausa, ore, straordinari:straord,
+      cantiere:f.cantiere, nomeCantiere:f.cantiere?f.nomeCantiere:"", ...payloadFasce };
     try {
       if (editing) await api.put(`/api/worklogs/${f.id}`, payload);
       else await api.post("/api/worklogs", payload);
@@ -481,18 +513,55 @@ function UserWorklogs({ logs, detected, reload }) {
   };
   const remove = async (l) => { if(!confirm("Eliminare questa registrazione?"))return; try { await api.del(`/api/worklogs/${l.id}`); reload(); } catch(e){ alert(e.message); } };
 
+  // anteprima ore calcolate
+  let anteprima = null;
+  try {
+    let ol = 0;
+    if (f.modo === "unico" && f.fine>f.inizio) ol = hoursBetween(f.inizio,f.fine) - (parseInt(f.pausa||"0",10)/60);
+    else if (f.modo === "fasce") ol = Math.max(0,hoursBetween(f.mattinoInizio,f.mattinoFine)) + Math.max(0,hoursBetween(f.pomeriggioInizio,f.pomeriggioFine));
+    else if (f.modo === "totale") ol = parseFloat(String(f.oreTotali).replace(",","."))||0;
+    if (ol>0) { const s=splitOre(ol); anteprima = `${round2(ol)}h totali → ${s.ore}h ordinarie${s.straord>0?` + ${s.straord}h straordinario`:""}`; }
+  } catch {}
+
   return (
     <div className="stack">
       <h2>Ore lavorate</h2>
       <div className="card formcard">
         {editing && <div className="editbanner">Stai modificando la registrazione del {fmtDate(f.data)}</div>}
-        <div className="grid5">
-          <label className="field"><span>Data (oggi)</span><input type="date" value={oggi} disabled title="Puoi registrare solo la giornata di oggi" /></label>
-          <label className="field"><span>Entrata</span><input type="time" value={f.inizio} onChange={e=>setF({...f,inizio:e.target.value})} /></label>
-          <label className="field"><span>Uscita</span><input type="time" value={f.fine} onChange={e=>setF({...f,fine:e.target.value})} /></label>
-          <label className="field"><span>Pausa (min)</span><input type="number" min="0" step="15" value={f.pausa} onChange={e=>setF({...f,pausa:e.target.value})} /></label>
-          <label className="field"><span>Straordinari (h)</span><input type="number" min="0" step="0.25" value={f.straordinari} onChange={e=>setF({...f,straordinari:e.target.value})} placeholder="auto se >8h" /></label>
+        <div className="modoswitch">
+          <button className={f.modo==="unico"?"modobtn on":"modobtn"} onClick={()=>setF({...f,modo:"unico"})}>Orario unico</button>
+          <button className={f.modo==="fasce"?"modobtn on":"modobtn"} onClick={()=>setF({...f,modo:"fasce"})}>Mattino + Pomeriggio</button>
+          <button className={f.modo==="totale"?"modobtn on":"modobtn"} onClick={()=>setF({...f,modo:"totale"})}>Totale ore</button>
         </div>
+
+        {f.modo==="unico" && (
+          <div className="grid4">
+            <label className="field"><span>Data (oggi)</span><input type="date" value={oggi} disabled /></label>
+            <label className="field"><span>Entrata</span><input type="time" value={f.inizio} onChange={e=>setF({...f,inizio:e.target.value})} /></label>
+            <label className="field"><span>Uscita</span><input type="time" value={f.fine} onChange={e=>setF({...f,fine:e.target.value})} /></label>
+            <label className="field"><span>Pausa (min)</span><input type="number" min="0" step="15" value={f.pausa} onChange={e=>setF({...f,pausa:e.target.value})} /></label>
+          </div>
+        )}
+        {f.modo==="fasce" && (
+          <>
+            <label className="field"><span>Data (oggi)</span><input type="date" value={oggi} disabled /></label>
+            <div className="grid4">
+              <label className="field"><span>Entrata mattino</span><input type="time" value={f.mattinoInizio} onChange={e=>setF({...f,mattinoInizio:e.target.value})} /></label>
+              <label className="field"><span>Uscita mattino</span><input type="time" value={f.mattinoFine} onChange={e=>setF({...f,mattinoFine:e.target.value})} /></label>
+              <label className="field"><span>Entrata pomeriggio</span><input type="time" value={f.pomeriggioInizio} onChange={e=>setF({...f,pomeriggioInizio:e.target.value})} /></label>
+              <label className="field"><span>Uscita pomeriggio</span><input type="time" value={f.pomeriggioFine} onChange={e=>setF({...f,pomeriggioFine:e.target.value})} /></label>
+            </div>
+          </>
+        )}
+        {f.modo==="totale" && (
+          <div className="grid2">
+            <label className="field"><span>Data (oggi)</span><input type="date" value={oggi} disabled /></label>
+            <label className="field"><span>Totale ore (es. 11,5)</span><input type="text" inputMode="decimal" value={f.oreTotali} onChange={e=>setF({...f,oreTotali:e.target.value})} placeholder="es. 11,5" /></label>
+          </div>
+        )}
+
+        {anteprima && <div className="anteprima">{anteprima}</div>}
+
         <div className="cantiererow">
           <label className="checkfield">
             <input type="checkbox" checked={f.cantiere} onChange={e=>setF({...f,cantiere:e.target.checked, nomeCantiere:e.target.checked?f.nomeCantiere:""})} />
@@ -518,7 +587,7 @@ function UserWorklogs({ logs, detected, reload }) {
           return (
             <div key={l.id} className="logrow">
               <div className="logdate">{fmtDate(l.data)}</div>
-              <div className="logtimes">{l.inizio}–{l.fine} · pausa {l.pausa}′ {l.cantiere ? <span className="sitetag cantiere">In cantiere{l.nome_cantiere?`: ${l.nome_cantiere}`:""}</span> : <span className="sitetag sede">In sede</span>}</div>
+              <div className="logtimes">{l.mattino_inizio ? `Matt ${l.mattino_inizio}–${l.mattino_fine} · Pom ${l.pomeriggio_inizio}–${l.pomeriggio_fine}` : (l.inizio ? `${l.inizio}–${l.fine} · pausa ${l.pausa}′` : "Totale ore")} {l.cantiere ? <span className="sitetag cantiere">In cantiere{l.nome_cantiere?`: ${l.nome_cantiere}`:""}</span> : <span className="sitetag sede">In sede</span>}</div>
               <div className="loghours">{round2(Number(l.ore))}h {straord>0 && <span className="straordtag">+{straord}h str.</span>}</div>
               <div className="logcompare">{det ? <span className={diff===0?"cmp ok":"cmp warn"}>Rilevate {round2(Number(det.ore))}h {diff!==0&&`(Δ ${diff>0?"+":""}${diff}h)`}</span> : <span className="muted small">nessun rilevamento</span>}</div>
               <div className="logactions">
@@ -902,7 +971,7 @@ function AdminUserWorklogs({ user, logs, detected, reload }) {
           return (
             <div key={l.id} className="logrow">
               <div className="logdate">{fmtDate(l.data)}</div>
-              <div className="logtimes">{l.inizio}–{l.fine} · pausa {l.pausa}′ {l.cantiere ? <span className="sitetag cantiere">In cantiere{l.nome_cantiere?`: ${l.nome_cantiere}`:""}</span> : <span className="sitetag sede">In sede</span>}</div>
+              <div className="logtimes">{l.mattino_inizio ? `Matt ${l.mattino_inizio}–${l.mattino_fine} · Pom ${l.pomeriggio_inizio}–${l.pomeriggio_fine}` : (l.inizio ? `${l.inizio}–${l.fine} · pausa ${l.pausa}′` : "Totale ore")} {l.cantiere ? <span className="sitetag cantiere">In cantiere{l.nome_cantiere?`: ${l.nome_cantiere}`:""}</span> : <span className="sitetag sede">In sede</span>}</div>
               <div className="loghours">{round2(Number(l.ore))}h {straord>0 && <span className="straordtag">+{straord}h str.</span>}</div>
               <div className="logcompare">{det ? <span className={diff===0?"cmp ok":"cmp warn"}>Rilevate {round2(Number(det.ore))}h {diff!==0&&`(Δ ${diff>0?"+":""}${diff}h)`}</span> : <span className="muted small">nessun rilevamento</span>}</div>
               <div className="logactions">
@@ -1418,6 +1487,10 @@ h3{ font-size:16px; margin:0 0 10px; }
 .straordtag{ font-size:11px; font-weight:700; color:#b3701c; background:#f7ecd9; padding:2px 7px; border-radius:20px; margin-left:6px; }
 .checkfield{ display:flex; align-items:center; gap:8px; font-size:14px; font-weight:600; color:var(--ink); margin:4px 0 12px; cursor:pointer; }
 .checkfield input[type=checkbox]{ width:18px; height:18px; accent-color:var(--accent); cursor:pointer; }
+.modoswitch{ display:flex; gap:6px; background:var(--bg); padding:4px; border-radius:12px; margin-bottom:14px; flex-wrap:wrap; }
+.modobtn{ flex:1; min-width:120px; border:0; background:transparent; padding:9px; border-radius:9px; cursor:pointer; font-weight:600; color:var(--muted); font-size:13.5px; font-family:inherit; }
+.modobtn.on{ background:var(--panel); color:var(--ink); box-shadow:var(--shadow); }
+.anteprima{ background:var(--panel2); border-radius:9px; padding:10px 12px; font-size:13.5px; font-weight:600; color:var(--accent-ink); margin:4px 0 12px; }
 .cantiererow{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:4px 0 12px; }
 .cantiererow .checkfield{ margin:0; }
 .punchcantiere{ justify-content:center; }
