@@ -87,6 +87,11 @@ export async function initDb() {
   await pool.query(`ALTER TABLE worklogs ADD COLUMN IF NOT EXISTS cantiere BOOLEAN DEFAULT false;`);
   await pool.query(`ALTER TABLE worklogs ADD COLUMN IF NOT EXISTS nome_cantiere TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE worklogs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();`);
+  // Fasce mattino/pomeriggio (opzionali, per chi registra a mano invece della timbratura)
+  await pool.query(`ALTER TABLE worklogs ADD COLUMN IF NOT EXISTS mattino_inizio TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE worklogs ADD COLUMN IF NOT EXISTS mattino_fine TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE worklogs ADD COLUMN IF NOT EXISTS pomeriggio_inizio TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE worklogs ADD COLUMN IF NOT EXISTS pomeriggio_fine TEXT DEFAULT '';`);
   // Migrazione: aggiunge la colonna archived ai messaggi.
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT false;`);
   // Migrazione: colonna per la pausa fissa a conto alla rovescia.
