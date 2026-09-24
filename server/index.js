@@ -129,6 +129,28 @@ app.post("/api/requests", auth, async (req, res) => {
       [req.user.id, tipo, mode, dataInizio, df,
        mode === "ore" ? oraInizio : null, mode === "ore" ? oraFine : null, (note || "").trim()]
     );
+
+    // Notifica agli amministratori: in-app + email (se SMTP configurato).
+    try {
+      const admins = (await pool.query("SELECT id, email FROM users WHERE role='admin'")).rows;
+      const richiedente = (await pool.query("SELECT name FROM users WHERE id=$1", [req.user.id])).rows[0];
+      const tipoLabel = { permesso: "Permesso", ferie: "Ferie", assenza: "Assenza" }[tipo];
+      const periodo = mode === "ore"
+        ? `${String(dataInizio).slice(0,10)} (${oraInizio}-${oraFine})`
+        : (String(dataInizio).slice(0,10) === String(df).slice(0,10)
+            ? String(dataInizio).slice(0,10)
+            : `dal ${String(dataInizio).slice(0,10)} al ${String(df).slice(0,10)}`);
+      const subject = `Nuova richiesta ${tipoLabel} da ${richiedente?.name || "un dipendente"}`;
+      const body = `${richiedente?.name || "Un dipendente"} ha inviato una richiesta di ${tipoLabel.toLowerCase()} per ${periodo}.${(note||"").trim() ? ` Note: ${note.trim()}` : ""} Accedi all'app per approvarla o respingerla.`;
+      for (const a of admins) {
+        await pool.query("INSERT INTO messages (user_id, subject, body) VALUES ($1,$2,$3)", [a.id, subject, body]);
+        sendMail(a.email, subject, body).catch(() => {}); // non blocco la risposta se la mail fallisce
+      }
+    } catch (notifyErr) {
+      console.error("Errore invio notifica admin:", notifyErr.message);
+      // la richiesta è comunque salvata: non fallisco la chiamata per un problema di notifica
+    }
+
     res.json(rows[0]);
   } catch (e) {
     console.error(e);
@@ -423,7 +445,8 @@ app.get("/api/worklogs", auth, async (req, res) => {
 });
 
 app.post("/api/worklogs", auth, async (req, res) => {
-  const { data, inizio, fine, pausa, ore, straordinari, cantiere, nomeCantiere } = req.body;
+  const { data, inizio, fine, pausa, ore, straordinari, cantiere, nomeCantiere,
+          mattinoInizio, mattinoFine, pomeriggioInizio, pomeriggioFine } = req.body;
   // L'utente può registrare ore solo per la giornata odierna (fuso Italia). L'admin senza vincoli.
   if (req.user.role !== "admin" && !isTodayItaly(data)) {
     return res.status(403).json({ error: "Puoi registrare le ore solo per la giornata di oggi. Le giornate passate può modificarle solo l'amministratore." });
@@ -431,9 +454,11 @@ app.post("/api/worklogs", auth, async (req, res) => {
   const nomeCant = cantiere ? String(nomeCantiere || "").trim() : "";
   try {
     const { rows } = await pool.query(
-      `INSERT INTO worklogs (user_id, data, inizio, fine, pausa, ore, straordinari, cantiere, nome_cantiere)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [req.user.id, data, inizio, fine, Number(pausa || 0), Number(ore), Number(straordinari || 0), !!cantiere, nomeCant]
+      `INSERT INTO worklogs (user_id, data, inizio, fine, pausa, ore, straordinari, cantiere, nome_cantiere,
+                             mattino_inizio, mattino_fine, pomeriggio_inizio, pomeriggio_fine)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      [req.user.id, data, inizio, fine, Number(pausa || 0), Number(ore), Number(straordinari || 0), !!cantiere, nomeCant,
+       mattinoInizio || "", mattinoFine || "", pomeriggioInizio || "", pomeriggioFine || ""]
     );
     res.json(rows[0]);
   } catch (e) {
@@ -445,7 +470,8 @@ app.post("/api/worklogs", auth, async (req, res) => {
 // Modifica di una registrazione ore. L'utente può correggere le proprie;
 // l'admin può correggere quelle di chiunque (in caso di incongruenza).
 app.put("/api/worklogs/:id", auth, async (req, res) => {
-  const { data, inizio, fine, pausa, ore, straordinari, cantiere, nomeCantiere } = req.body;
+  const { data, inizio, fine, pausa, ore, straordinari, cantiere, nomeCantiere,
+          mattinoInizio, mattinoFine, pomeriggioInizio, pomeriggioFine } = req.body;
   try {
     const { rows } = await pool.query("SELECT * FROM worklogs WHERE id=$1", [req.params.id]);
     const w = rows[0];
@@ -461,10 +487,12 @@ app.put("/api/worklogs/:id", auth, async (req, res) => {
       return res.status(403).json({ error: "Puoi impostare solo la data di oggi." });
     }
     const { rows: upd } = await pool.query(
-      `UPDATE worklogs SET data=$1, inizio=$2, fine=$3, pausa=$4, ore=$5, straordinari=$6, cantiere=$7, nome_cantiere=$8, updated_at=now()
-       WHERE id=$9 RETURNING *`,
+      `UPDATE worklogs SET data=$1, inizio=$2, fine=$3, pausa=$4, ore=$5, straordinari=$6, cantiere=$7, nome_cantiere=$8,
+        mattino_inizio=$9, mattino_fine=$10, pomeriggio_inizio=$11, pomeriggio_fine=$12, updated_at=now()
+       WHERE id=$13 RETURNING *`,
       [data, inizio, fine, Number(pausa || 0), Number(ore), Number(straordinari || 0), !!cantiere,
-       cantiere ? String(nomeCantiere || "").trim() : "", req.params.id]
+       cantiere ? String(nomeCantiere || "").trim() : "",
+       mattinoInizio || "", mattinoFine || "", pomeriggioInizio || "", pomeriggioFine || "", req.params.id]
     );
     res.json(upd[0]);
   } catch (e) {
