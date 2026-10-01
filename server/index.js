@@ -685,7 +685,7 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
     const wb = new ExcelJS.Workbook();
     wb.creator = "Gestione ore";
     const titolo = `${MESI[month - 1] || month} ${year}`;
-    const usedNames = new Set(["Indice", "Giornaliero"]);
+    const usedNames = new Set(["Indice", "Foglio unico", "Giornaliero"]);
 
     const people = users.map(u => {
       const logs = worklogs
@@ -719,6 +719,49 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
     });
     idx.autoFilter = { from: "A2", to: "F2" };
     idx.getRow(2).height = 22;
+
+    // --- Foglio unico: tutte le giornate di tutti, una riga per giornata, filtrabile ---
+    const unico = wb.addWorksheet("Foglio unico", {
+      views: [{ state: "frozen", ySplit: 2 }],
+      pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 },
+    });
+    unico.columns = [
+      { width: 26 }, { width: 30 }, { width: 14 }, { width: 12 }, { width: 12 }, { width: 12 },
+      { width: 14 }, { width: 16 }, { width: 16 }, { width: 28 },
+    ];
+    unico.mergeCells("A1:J1");
+    unico.getCell("A1").value = `Tutti i dipendenti · ${titolo} · una riga per giornata`;
+    paintHeader(unico.getRow(1), "FF1F4E3D");
+    ["Dipendente", "Email", "Data", "Giorno", "Inizio", "Fine", "Pausa (min)", "Ore lavorate", "Straordinari (h)", "Sede / cantiere"].forEach((h, i) => {
+      unico.getCell(2, i + 1).value = h;
+    });
+    paintHeader(unico.getRow(2), "FF3A7D6B");
+    const flat = [];
+    people.forEach(({ u, logs }) => {
+      logs.forEach(w => flat.push({ u, w }));
+    });
+    flat.sort((a, b) => a.u.name.localeCompare(b.u.name, "it") || toISO(a.w.data).localeCompare(toISO(b.w.data)) || String(a.w.inizio || "").localeCompare(String(b.w.inizio || "")));
+    let lastName = "";
+    let band = 0;
+    if (flat.length === 0) {
+      unico.addRow(["Nessuna giornata registrata in questo mese"]);
+    } else {
+      flat.forEach(({ u, w }) => {
+        if (u.name !== lastName) { band += 1; lastName = u.name; }
+        const iso = toISO(w.data);
+        const sede = w.cantiere ? `Cantiere${w.nome_cantiere ? ": " + w.nome_cantiere : ""}` : "Sede";
+        const row = unico.addRow([
+          u.name, u.email, fmtD(w.data), weekday(iso), w.inizio || "", w.fine || "",
+          Number(w.pausa || 0), round2(w.ore), round2(w.straordinari), sede,
+        ]);
+        row.getCell(8).numFmt = "0.00";
+        row.getCell(9).numFmt = "0.00";
+        if (band % 2 === 0) row.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF4F7F5" } };
+        if (Number(w.straordinari) > 0) row.getCell(9).font = { bold: true, color: { argb: "FF8A5410" } };
+      });
+    }
+    unico.autoFilter = { from: "A2", to: "J2" };
+    unico.pageSetup.printTitlesRow = "1:2";
 
     // --- Giornaliero: un blocco colorato per persona, righe non sommate ---
     const ws = wb.addWorksheet("Giornaliero", {
