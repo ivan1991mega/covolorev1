@@ -869,16 +869,22 @@ function UserExportBox({ user }) {
 }
 
 function AdminUsers({ users, reqs, logs, detected, selected, setSelected, cursor, setCursor, reload }) {
+  const [showAdd, setShowAdd] = useState(false);
   if (selected) {
     const u = users.find(x=>x.id===selected);
+    if (!u) return <button className="btn ghost" onClick={()=>setSelected(null)}>← Tutti gli utenti</button>;
     const uReqs = reqs.filter(r=>r.user_id===u.id);
     const uLogs = logs.filter(w=>w.user_id===u.id);
     const uDet = detected.filter(d=>d.user_id===u.id);
     return (
       <div className="stack">
         <button className="btn ghost" onClick={()=>setSelected(null)}>← Tutti gli utenti</button>
-        <div className="rowbetween"><h2>{u.name}</h2><span className="muted">{u.email}</span></div>
-        <UserExportBox user={u} />
+        <div className="rowbetween">
+          <h2>{u.name}</h2>
+          <span className="muted">{u.email} · {u.role==="admin"?"Amministratore":"Dipendente"}</span>
+        </div>
+        <ResetPassword user={u} />
+        {u.role!=="admin" && <UserExportBox user={u} />}
         <MonthlySummary reqs={uReqs} logs={uLogs} detected={uDet} cursor={cursor} setCursor={setCursor} showCompare />
         <AdminUserWorklogs user={u} logs={uLogs} detected={uDet} reload={reload} />
         <div className="card">
@@ -895,19 +901,113 @@ function AdminUsers({ users, reqs, logs, detected, selected, setSelected, cursor
   }
   return (
     <div className="stack">
-      <h2>Utenti</h2>
+      <div className="rowbetween">
+        <h2>Utenti</h2>
+        <button className="btn primary" onClick={()=>setShowAdd(v=>!v)}>{showAdd?"Chiudi":"+ Nuovo utente"}</button>
+      </div>
+      {showAdd && <NewUserForm onCreated={()=>{ reload(); }} />}
       <div className="usergrid">
         {users.map(u=>{
           const pend = reqs.filter(r=>r.user_id===u.id && r.stato==="in_attesa").length;
           return (
             <button key={u.id} className="usercard" onClick={()=>setSelected(u.id)}>
               <div className="avatar big">{initials(u.name)}</div>
-              <div className="usercardbody"><div className="reqtitle">{u.name}</div><div className="muted small">{u.email}</div></div>
+              <div className="usercardbody">
+                <div className="reqtitle">{u.name} <span className={"rolechip "+(u.role==="admin"?"admin":"user")}>{u.role==="admin"?"Admin":"Utente"}</span></div>
+                <div className="muted small">{u.email}</div>
+              </div>
               {pend>0 && <span className="badge solid">{pend}</span>}
             </button>
           );
         })}
         {users.length===0 && <div className="empty">Nessun utente registrato.</div>}
+      </div>
+    </div>
+  );
+}
+
+function NewUserForm({ onCreated }) {
+  const [f, setF] = useState({ name:"", email:"", password:"", role:"user", sendEmail:true });
+  const [err, setErr] = useState("");
+  const [ok, setOk] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setErr(""); setOk(""); setBusy(true);
+    try {
+      const res = await api.post("/api/users", f);
+      const extra = res.emailSent
+        ? " Email con le credenziali inviata."
+        : (f.sendEmail ? " Email non inviata (SMTP non configurato): comunica la password a voce o per messaggio." : "");
+      setOk(`Account creato: ${res.user.name} (${res.user.email}). Password iniziale: ${f.password}.${extra}`);
+      setF({ name:"", email:"", password:"", role:"user", sendEmail:true });
+      onCreated();
+    } catch(e) { setErr(e.message); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="card">
+      <h3>Nuovo utente</h3>
+      <p className="muted small">L'account può accedere subito. La registrazione pubblica resta disponibile.</p>
+      <div className="grid2">
+        <label className="field"><span>Nome e cognome</span>
+          <input value={f.name} onChange={e=>setF({...f,name:e.target.value})} placeholder="Mario Rossi" /></label>
+        <label className="field"><span>Email</span>
+          <input type="email" value={f.email} onChange={e=>setF({...f,email:e.target.value})} placeholder="mario@azienda.it" /></label>
+        <label className="field"><span>Password iniziale</span>
+          <input value={f.password} onChange={e=>setF({...f,password:e.target.value})} placeholder="minimo 4 caratteri" /></label>
+        <label className="field"><span>Ruolo</span>
+          <select value={f.role} onChange={e=>setF({...f,role:e.target.value})}>
+            <option value="user">Dipendente</option>
+            <option value="admin">Amministratore</option>
+          </select></label>
+      </div>
+      <label className="checkfield" style={{marginBottom:12}}>
+        <input type="checkbox" checked={f.sendEmail} onChange={e=>setF({...f,sendEmail:e.target.checked})} />
+        <span>Invia email con le credenziali (solo se SMTP è configurato su Railway)</span>
+      </label>
+      {err && <div className="alert">{err}</div>}
+      {ok && <div className="okmsg">{ok}</div>}
+      <button className="btn primary" onClick={submit} disabled={busy}>{busy?"Creo…":"Aggiungi utente"}</button>
+    </div>
+  );
+}
+
+function ResetPassword({ user }) {
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState("");
+  const [ok, setOk] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    setErr(""); setOk(""); setBusy(true);
+    try {
+      await api.put(`/api/users/${user.id}/password`, { password: pw });
+      setOk("Password aggiornata. Comunicala all'utente.");
+      setPw("");
+    } catch(e) { setErr(e.message); }
+    finally { setBusy(false); }
+  };
+
+  const remove = async () => {
+    if (!confirm(`Eliminare l'account di ${user.name}? Verranno cancellate anche ore, richieste e messaggi.`)) return;
+    try { await api.del(`/api/users/${user.id}`); window.location.reload(); }
+    catch(e){ setErr(e.message); }
+  };
+
+  return (
+    <div className="card">
+      <h3>Accesso</h3>
+      <div className="grid2">
+        <label className="field"><span>Nuova password</span>
+          <input value={pw} onChange={e=>setPw(e.target.value)} placeholder="minimo 4 caratteri" /></label>
+      </div>
+      {err && <div className="alert">{err}</div>}
+      {ok && <div className="okmsg">{ok}</div>}
+      <div className="rowend">
+        <button className="btn danger" onClick={remove}>Elimina account</button>
+        <button className="btn primary" onClick={save} disabled={busy || pw.length<4}>{busy?"Salvo…":"Reimposta password"}</button>
       </div>
     </div>
   );

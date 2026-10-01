@@ -96,7 +96,7 @@ Al primo avvio, l'app crea le tabelle e l'account amministratore con l'email e l
 1. Railway rifà il deploy da solo dopo aver aggiunto le variabili (altrimenti premi **Deploy**).
 2. Nella scheda **Settings → Networking**, genera un dominio pubblico (**Generate Domain**).
 3. Apri il dominio: vedrai la schermata di accesso. Entra con `ADMIN_EMAIL` / `ADMIN_PASSWORD`.
-4. I dipendenti si registrano da soli con "Registrati", usando la propria email.
+4. I dipendenti si registrano da soli con "Registrati", oppure l'amministratore li crea dal pannello **Utenti → Nuovo utente** (nome, email, password iniziale, ruolo). Dalla scheda utente si può anche reimpostare la password o eliminare l'account.
 
 Ogni volta che fai `git push`, Railway aggiorna l'app automaticamente.
 

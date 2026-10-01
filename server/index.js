@@ -553,9 +553,76 @@ app.delete("/api/detected/:id", auth, adminOnly, async (req, res) => {
 // ============================================================
 app.get("/api/users", auth, adminOnly, async (req, res) => {
   const { rows } = await pool.query(
-    "SELECT id, name, email, role FROM users WHERE role='user' ORDER BY name"
+    "SELECT id, name, email, role FROM users ORDER BY role, name"
   );
   res.json(rows);
+});
+
+// L'admin crea un account (dipendente o altro amministratore) senza passare dalla registrazione pubblica.
+app.post("/api/users", auth, adminOnly, async (req, res) => {
+  const { name, email, password, role, sendEmail } = req.body || {};
+  const ruolo = role === "admin" ? "admin" : "user";
+  if (!name?.trim()) return res.status(400).json({ error: "Inserisci il nome." });
+  if (!/^\S+@\S+\.\S+$/.test(email || "")) return res.status(400).json({ error: "Email non valida." });
+  if ((password || "").length < 4) return res.status(400).json({ error: "Password troppo corta (min 4)." });
+  try {
+    const exists = await pool.query("SELECT 1 FROM users WHERE lower(email)=lower($1)", [email]);
+    if (exists.rowCount) return res.status(409).json({ error: "Email già registrata." });
+    const hash = await bcrypt.hash(password, 10);
+    const { rows } = await pool.query(
+      "INSERT INTO users (name, email, pw_hash, role) VALUES ($1,$2,$3,$4) RETURNING id, name, email, role",
+      [name.trim(), email.trim().toLowerCase(), hash, ruolo]
+    );
+    const u = rows[0];
+    const subject = "Account creato";
+    const body = `Ciao ${u.name}, l'amministratore ha creato il tuo account su Gestione ore. Accedi con ${u.email} e la password che ti è stata comunicata.`;
+    await pool.query("INSERT INTO messages (user_id, subject, body) VALUES ($1,$2,$3)", [u.id, subject, body]);
+    let emailSent = false;
+    if (sendEmail) {
+      emailSent = await sendMail(
+        u.email,
+        "Il tuo account Gestione ore",
+        `Ciao ${u.name},\n\nl'amministratore ha creato il tuo account.\n\nEmail: ${u.email}\nPassword iniziale: ${password}\nRuolo: ${ruolo === "admin" ? "amministratore" : "dipendente"}\n\nAccedi dall'app e conserva la password.`
+      );
+    }
+    res.json({ user: u, emailSent });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Errore nella creazione dell'utente." });
+  }
+});
+
+// Reimposta la password di un altro account (non la propria, per non chiudersi fuori per sbaglio).
+app.put("/api/users/:id/password", auth, adminOnly, async (req, res) => {
+  if (Number(req.params.id) === req.user.id) {
+    return res.status(400).json({ error: "Per il tuo account usa la password attuale: non puoi reimpostarla da qui." });
+  }
+  const password = req.body?.password || "";
+  if (password.length < 4) return res.status(400).json({ error: "Password troppo corta (min 4)." });
+  try {
+    const hash = await bcrypt.hash(password, 10);
+    const { rowCount } = await pool.query("UPDATE users SET pw_hash=$1 WHERE id=$2", [hash, req.params.id]);
+    if (!rowCount) return res.status(404).json({ error: "Utente non trovato." });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Errore nel cambio password." });
+  }
+});
+
+// Elimina un account e i dati collegati (richieste, ore, messaggi). Non puoi eliminare te stesso.
+app.delete("/api/users/:id", auth, adminOnly, async (req, res) => {
+  if (Number(req.params.id) === req.user.id) {
+    return res.status(400).json({ error: "Non puoi eliminare il tuo account." });
+  }
+  try {
+    const { rowCount } = await pool.query("DELETE FROM users WHERE id=$1", [req.params.id]);
+    if (!rowCount) return res.status(404).json({ error: "Utente non trovato." });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Errore nell'eliminazione dell'utente." });
+  }
 });
 
 // ============================================================
