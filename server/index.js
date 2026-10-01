@@ -653,59 +653,165 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
   const year = Number(req.query.year) || new Date().getFullYear();
   const month = Number(req.query.month) || (new Date().getMonth() + 1);
   const inMonth = (v) => { const s = toISO(v); return Number(s.slice(0,4)) === year && Number(s.slice(5,7)) === month; };
+  const fmtD = (v) => { const s = toISO(v); if (!s) return ""; const [y,m,d]=s.split("-"); return `${d}/${m}/${y}`; };
+  const weekday = (iso) => {
+    if (!iso) return "";
+    const [y,m,d] = iso.split("-").map(Number);
+    return ["Dom","Lun","Mar","Mer","Gio","Ven","Sab"][new Date(y, m - 1, d).getDay()];
+  };
+  const round2 = (n) => Math.round(Number(n || 0) * 100) / 100;
+  const MESI = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno","Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"];
+  const COLORS = ["FF1F6B4A","FF2B5F8A","FF8A5410","FF5B3F86","FF9A3B3B","FF1D6A6A","FF3E5C3A","FF6B4C2A"];
+
+  function sheetName(name, used) {
+    let base = String(name || "Utente").replace(/[\\/*?:\[\]]/g, " ").replace(/\s+/g, " ").trim().slice(0, 28) || "Utente";
+    let n = base;
+    let i = 2;
+    while (used.has(n)) { n = `${base.slice(0, 25)} ${i++}`; }
+    used.add(n);
+    return n;
+  }
+  function paintHeader(row, argb) {
+    row.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+    row.fill = { type: "pattern", pattern: "solid", fgColor: { argb } };
+    row.alignment = { vertical: "middle" };
+    row.height = 22;
+  }
 
   try {
     const users = (await pool.query("SELECT id, name, email FROM users WHERE role='user' ORDER BY name")).rows;
     const worklogs = (await pool.query("SELECT * FROM worklogs")).rows;
-    const requests = (await pool.query("SELECT * FROM requests WHERE stato='approvata'")).rows;
 
     const wb = new ExcelJS.Workbook();
     wb.creator = "Gestione ore";
-    const ws = wb.addWorksheet(`${String(month).padStart(2,"0")}-${year}`);
+    const titolo = `${MESI[month - 1] || month} ${year}`;
+    const usedNames = new Set(["Indice", "Giornaliero"]);
 
-    ws.columns = [
-      { header: "Dipendente", key: "name", width: 26 },
-      { header: "Email", key: "email", width: 30 },
-      { header: "Data", key: "data", width: 14 },
-      { header: "Inizio", key: "inizio", width: 10 },
-      { header: "Fine", key: "fine", width: 10 },
-      { header: "Pausa (min)", key: "pausa", width: 12 },
-      { header: "Ore lavorate", key: "ore", width: 14 },
-      { header: "Straordinari (h)", key: "straord", width: 16 },
-      { header: "Sede", key: "sede", width: 14 },
-      { header: "Cantiere", key: "cantiere", width: 28 },
+    const people = users.map(u => {
+      const logs = worklogs
+        .filter(w => w.user_id === u.id && inMonth(w.data))
+        .sort((a, b) => toISO(a.data).localeCompare(toISO(b.data)) || String(a.inizio || "").localeCompare(String(b.inizio || "")));
+      return { u, logs };
+    });
+
+    // --- Indice: una riga per dipendente, così i 16 nomi si vedono subito ---
+    const idx = wb.addWorksheet("Indice", { views: [{ state: "frozen", ySplit: 2 }] });
+    idx.columns = [
+      { width: 28 }, { width: 32 }, { width: 16 }, { width: 16 }, { width: 18 }, { width: 22 },
     ];
-    ws.getRow(1).font = { bold: true };
-    ws.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF3A7D6B" } };
-    ws.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    idx.mergeCells("A1:F1");
+    idx.getCell("A1").value = `Dipendenti · ${titolo}`;
+    paintHeader(idx.getRow(1), "FF1F4E3D");
+    ["Dipendente", "Email", "Giorni", "Ore lavorate", "Straordinari (h)", "Foglio dettaglio"].forEach((h, i) => {
+      idx.getCell(2, i + 1).value = h;
+    });
+    paintHeader(idx.getRow(2), "FF3A7D6B");
+    people.forEach(({ u, logs }, i) => {
+      const ore = round2(logs.reduce((s, w) => s + Number(w.ore || 0), 0));
+      const straord = round2(logs.reduce((s, w) => s + Number(w.straordinari || 0), 0));
+      const tab = sheetName(u.name, usedNames);
+      const row = idx.addRow([u.name, u.email, logs.length, ore, straord, tab]);
+      row.getCell(6).value = { text: tab, hyperlink: `#'${tab.replace(/'/g, "''")}'!A1` };
+      row.getCell(6).font = { color: { argb: "FF1F4E8A" }, underline: true };
+      if (i % 2 === 1) row.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF4F7F5" } };
+      row.alignment = { vertical: "middle" };
+      u._sheet = tab;
+    });
+    idx.autoFilter = { from: "A2", to: "F2" };
+    idx.getRow(2).height = 22;
 
-    const fmtD = (v) => { const s = toISO(v); if (!s) return ""; const [y,m,d]=s.split("-"); return `${d}/${m}/${y}`; };
-    const rows = [];
-    for (const u of users) {
-      const uLogs = worklogs.filter(w => w.user_id === u.id && inMonth(w.data));
-      for (const w of uLogs) {
-        rows.push({
-          name: u.name,
-          email: u.email,
-          data: fmtD(w.data),
-          sort: toISO(w.data),
-          inizio: w.inizio || "",
-          fine: w.fine || "",
-          pausa: Number(w.pausa || 0),
-          ore: Math.round(Number(w.ore) * 100) / 100,
-          straord: Math.round(Number(w.straordinari || 0) * 100) / 100,
-          sede: w.cantiere ? "Cantiere" : "Sede",
-          cantiere: w.cantiere ? (w.nome_cantiere || "") : "",
+    // --- Giornaliero: un blocco colorato per persona, righe non sommate ---
+    const ws = wb.addWorksheet("Giornaliero", {
+      views: [{ state: "frozen", ySplit: 2 }],
+      pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 },
+    });
+    ws.columns = [
+      { width: 14 }, { width: 12 }, { width: 12 }, { width: 12 }, { width: 16 }, { width: 18 }, { width: 14 }, { width: 28 },
+    ];
+    ws.mergeCells("A1:H1");
+    ws.getCell("A1").value = `Ore giornaliere · ${titolo} · una riga per giornata, non il totale del mese`;
+    paintHeader(ws.getRow(1), "FF1F4E3D");
+    const headers = ["Data", "Giorno", "Inizio", "Fine", "Pausa (min)", "Ore lavorate", "Straordinari (h)", "Sede / cantiere"];
+    headers.forEach((h, i) => { ws.getCell(2, i + 1).value = h; });
+    paintHeader(ws.getRow(2), "FF3A7D6B");
+    ws.autoFilter = { from: "A2", to: "H2" };
+    ws.pageSetup.printTitlesRow = "1:2";
+
+    people.forEach(({ u, logs }, i) => {
+      const color = COLORS[i % COLORS.length];
+      const banner = ws.addRow([`${u.name}  ·  ${u.email}`]);
+      ws.mergeCells(banner.number, 1, banner.number, 8);
+      paintHeader(banner, color);
+      banner.height = 24;
+      if (logs.length === 0) {
+        const empty = ws.addRow(["Nessuna giornata registrata in questo mese"]);
+        empty.font = { italic: true, color: { argb: "FF6B7280" } };
+      } else {
+        let ore = 0, straord = 0;
+        logs.forEach(w => {
+          const iso = toISO(w.data);
+          const sede = w.cantiere ? `Cantiere${w.nome_cantiere ? ": " + w.nome_cantiere : ""}` : "Sede";
+          const row = ws.addRow([
+            fmtD(w.data), weekday(iso), w.inizio || "", w.fine || "",
+            Number(w.pausa || 0), round2(w.ore), round2(w.straordinari), sede,
+          ]);
+          row.outlineLevel = 1;
+          row.getCell(6).numFmt = "0.00";
+          row.getCell(7).numFmt = "0.00";
+          if (Number(w.straordinari) > 0) row.getCell(7).font = { bold: true, color: { argb: "FF8A5410" } };
+          ore += Number(w.ore || 0);
+          straord += Number(w.straordinari || 0);
         });
+        const tot = ws.addRow(["Totale mese", "", "", "", "", round2(ore), round2(straord), `${logs.length} giornate`]);
+        tot.font = { bold: true };
+        tot.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7F0EC" } };
+        tot.getCell(6).numFmt = "0.00";
+        tot.getCell(7).numFmt = "0.00";
       }
-    }
-    rows.sort((a, b) => a.name.localeCompare(b.name, "it") || a.sort.localeCompare(b.sort) || String(a.inizio).localeCompare(String(b.inizio)));
-    if (rows.length === 0) {
-      ws.addRow({ name: "Nessuna giornata registrata in questo mese" });
-    } else {
-      rows.forEach(r => ws.addRow(r));
-    }
-    ws.autoFilter = { from: "A1", to: "J1" };
+      ws.addRow([]);
+    });
+
+    // --- Un foglio per dipendente, così con 16 persone ognuno sta da solo ---
+    people.forEach(({ u, logs }, i) => {
+      const tab = u._sheet;
+      const sh = wb.addWorksheet(tab, { views: [{ state: "frozen", ySplit: 3 }] });
+      sh.columns = [
+        { width: 14 }, { width: 12 }, { width: 12 }, { width: 12 }, { width: 16 }, { width: 18 }, { width: 18 }, { width: 28 },
+      ];
+      sh.mergeCells("A1:H1");
+      sh.getCell("A1").value = `${u.name} · ${u.email} · ${titolo}`;
+      paintHeader(sh.getRow(1), COLORS[i % COLORS.length]);
+      sh.mergeCells("A2:H2");
+      sh.getCell("A2").value = "Una riga per giornata. Le ore non sono sommate: il totale è solo nell'ultima riga.";
+      sh.getRow(2).font = { italic: true, color: { argb: "FF4B5563" } };
+      ["Data", "Giorno", "Inizio", "Fine", "Pausa (min)", "Ore lavorate", "Straordinari (h)", "Sede / cantiere"].forEach((h, c) => {
+        sh.getCell(3, c + 1).value = h;
+      });
+      paintHeader(sh.getRow(3), "FF3A7D6B");
+      if (logs.length === 0) {
+        sh.addRow(["Nessuna giornata registrata in questo mese"]);
+      } else {
+        let ore = 0, straord = 0;
+        logs.forEach(w => {
+          const iso = toISO(w.data);
+          const sede = w.cantiere ? `Cantiere${w.nome_cantiere ? ": " + w.nome_cantiere : ""}` : "Sede";
+          const row = sh.addRow([
+            fmtD(w.data), weekday(iso), w.inizio || "", w.fine || "",
+            Number(w.pausa || 0), round2(w.ore), round2(w.straordinari), sede,
+          ]);
+          row.getCell(6).numFmt = "0.00";
+          row.getCell(7).numFmt = "0.00";
+          if (Number(w.straordinari) > 0) row.getCell(7).font = { bold: true, color: { argb: "FF8A5410" } };
+          ore += Number(w.ore || 0);
+          straord += Number(w.straordinari || 0);
+        });
+        const tot = sh.addRow(["Totale mese", "", "", "", "", round2(ore), round2(straord), `${logs.length} giornate`]);
+        tot.font = { bold: true };
+        tot.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7F0EC" } };
+      }
+      sh.autoFilter = { from: "A3", to: "H3" };
+      sh.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 };
+    });
 
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Disposition", `attachment; filename="riepilogo_${year}_${String(month).padStart(2,"0")}.xlsx"`);
