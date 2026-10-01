@@ -666,59 +666,46 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
     ws.columns = [
       { header: "Dipendente", key: "name", width: 26 },
       { header: "Email", key: "email", width: 30 },
+      { header: "Data", key: "data", width: 14 },
+      { header: "Inizio", key: "inizio", width: 10 },
+      { header: "Fine", key: "fine", width: 10 },
+      { header: "Pausa (min)", key: "pausa", width: 12 },
       { header: "Ore lavorate", key: "ore", width: 14 },
       { header: "Straordinari (h)", key: "straord", width: 16 },
-      { header: "Gg in cantiere", key: "cantiere", width: 14 },
-      { header: "Cantieri", key: "cantieri", width: 30 },
-      { header: "Permessi (h)", key: "permessi", width: 14 },
-      { header: "Ferie (gg)", key: "ferie", width: 12 },
-      { header: "Assenze (gg)", key: "assenze", width: 13 },
+      { header: "Sede", key: "sede", width: 14 },
+      { header: "Cantiere", key: "cantiere", width: 28 },
     ];
     ws.getRow(1).font = { bold: true };
     ws.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF3A7D6B" } };
     ws.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
 
+    const fmtD = (v) => { const s = toISO(v); if (!s) return ""; const [y,m,d]=s.split("-"); return `${d}/${m}/${y}`; };
+    const rows = [];
     for (const u of users) {
       const uLogs = worklogs.filter(w => w.user_id === u.id && inMonth(w.data));
-      const ore = uLogs.reduce((s, w) => s + Number(w.ore), 0);
-      const straord = uLogs.reduce((s, w) => s + Number(w.straordinari || 0), 0);
-      const giorniCantiere = uLogs.filter(w => w.cantiere).length;
-      // nomi distinti dei cantieri del mese
-      const nomiCantieri = [...new Set(uLogs.filter(w => w.cantiere && w.nome_cantiere).map(w => w.nome_cantiere.trim()))].join(", ");
-
-      let permessi = 0, ferie = 0, assenze = 0;
-      requests.filter(r => r.user_id === u.id).forEach(r => {
-        const giorni = eachDayISO(r.data_inizio, r.data_fine).filter(inMonth);
-        if (r.tipo === "permesso") {
-          if (r.mode === "ore" && inMonth(r.data_inizio)) permessi += hoursBetween(r.ora_inizio, r.ora_fine);
-          else permessi += giorni.length * 8;
-        } else if (r.tipo === "ferie") ferie += giorni.length;
-        else if (r.tipo === "assenza") assenze += giorni.length;
-      });
-
-      ws.addRow({
-        name: u.name, email: u.email,
-        ore: Math.round(ore * 100) / 100,
-        straord: Math.round(straord * 100) / 100,
-        cantiere: giorniCantiere,
-        cantieri: nomiCantieri,
-        permessi: Math.round(permessi * 100) / 100,
-        ferie, assenze,
-      });
+      for (const w of uLogs) {
+        rows.push({
+          name: u.name,
+          email: u.email,
+          data: fmtD(w.data),
+          sort: toISO(w.data),
+          inizio: w.inizio || "",
+          fine: w.fine || "",
+          pausa: Number(w.pausa || 0),
+          ore: Math.round(Number(w.ore) * 100) / 100,
+          straord: Math.round(Number(w.straordinari || 0) * 100) / 100,
+          sede: w.cantiere ? "Cantiere" : "Sede",
+          cantiere: w.cantiere ? (w.nome_cantiere || "") : "",
+        });
+      }
     }
-
-    // riga totali
-    const last = users.length + 2;
-    const totalRow = ws.addRow({
-      name: "TOTALE", email: "",
-      ore: { formula: `SUM(C2:C${last-1})` },
-      straord: { formula: `SUM(D2:D${last-1})` },
-      cantiere: { formula: `SUM(E2:E${last-1})` },
-      permessi: { formula: `SUM(G2:G${last-1})` },
-      ferie: { formula: `SUM(H2:H${last-1})` },
-      assenze: { formula: `SUM(I2:I${last-1})` },
-    });
-    totalRow.font = { bold: true };
+    rows.sort((a, b) => a.name.localeCompare(b.name, "it") || a.sort.localeCompare(b.sort) || String(a.inizio).localeCompare(String(b.inizio)));
+    if (rows.length === 0) {
+      ws.addRow({ name: "Nessuna giornata registrata in questo mese" });
+    } else {
+      rows.forEach(r => ws.addRow(r));
+    }
+    ws.autoFilter = { from: "A1", to: "J1" };
 
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Disposition", `attachment; filename="riepilogo_${year}_${String(month).padStart(2,"0")}.xlsx"`);
