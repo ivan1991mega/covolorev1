@@ -729,9 +729,9 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
       { width: 14 }, { width: 12 }, { width: 12 }, { width: 12 }, { width: 14 }, { width: 16 }, { width: 16 }, { width: 28 },
     ];
     ws.mergeCells("A1:H1");
-    ws.getCell("A1").value = `Ore giornaliere · ${titolo} · totale straordinari in ore decimali, per eccesso al quarto d'ora`;
+    ws.getCell("A1").value = `Ore giornaliere · ${titolo} · straordinari del giorno in minuti, totale in ore decimali per eccesso al quarto d'ora`;
     paintHeader(ws.getRow(1), "FF1F4E3D");
-    ["Data", "Giorno", "Inizio", "Fine", "Pausa (min)", "Ore lavorate", "Straordinari", "Sede / cantiere"].forEach((h, i) => {
+    ["Data", "Giorno", "Inizio", "Fine", "Pausa (min)", "Ore lavorate", "Straordinari (min)", "Sede / cantiere"].forEach((h, i) => {
       ws.getCell(2, i + 1).value = h;
     });
     paintHeader(ws.getRow(2), "FF3A7D6B");
@@ -752,10 +752,11 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
           const sede = w.cantiere ? `Cantiere${w.nome_cantiere ? ": " + w.nome_cantiere : ""}` : "Sede";
           const row = ws.addRow([
             fmtD(w.data), weekday(iso), w.inizio || "", w.fine || "",
-            Number(w.pausa || 0), oreHM(w.ore), oreHM(w.straordinari), sede,
+            Number(w.pausa || 0), oreHM(w.ore), Math.round(Number(w.straordinari || 0) * 60), sede,
           ]);
           asTime(row.getCell(6));
-          asTime(row.getCell(7));
+          row.getCell(7).numFmt = "0";
+          row.getCell(7).alignment = { horizontal: "center" };
           if (Number(w.straordinari) > 0) row.getCell(7).font = { bold: true, color: { argb: "FF8A5410" } };
           ore += Number(w.ore || 0);
           straord += Number(w.straordinari || 0);
