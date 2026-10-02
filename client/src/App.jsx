@@ -809,7 +809,7 @@ function TeamCalendar({ reqs, cursor, setCursor }) {
         <h2>Calendario del team</h2>
         <button className="btn primary" onClick={doExport} disabled={exporting}>{exporting?"Genero…":"⭳ Esporta mese in Excel"}</button>
       </div>
-      <p className="muted small">Ogni giorno mostra chi è in permesso / ferie / assenza. Clicca un giorno per vederne il dettaglio. L'Excel del mese ha il Foglio unico (tutte le giornate di tutti), l'Indice, i blocchi per persona e un foglio per ogni utente. Ore lavorate e straordinari restano separati.</p>
+      <p className="muted small">Ogni giorno mostra chi è in permesso / ferie / assenza. Clicca un giorno per vederne il dettaglio. L'Excel del mese ha solo il foglio Giornaliero: una riga per giornata e, in fondo a ogni persona, la somma degli straordinari in ore decimali arrotondata per eccesso al quarto d'ora.</p>
       <MonthNav cursor={cursor} setCursor={setCursor} />
       <CalendarGrid cursor={cursor} onDayClick={(day)=>{ if(byDay[day]) setDayDetail({ day, list:byDay[day] }); }} render={(day)=>{
         const list = byDay[day]; if (!list) return null;

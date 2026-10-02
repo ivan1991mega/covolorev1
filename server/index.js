@@ -659,35 +659,20 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
     const [y,m,d] = iso.split("-").map(Number);
     return ["Dom","Lun","Mar","Mer","Gio","Ven","Sab"][new Date(y, m - 1, d).getDay()];
   };
-  const round2 = (n) => Math.round(Number(n || 0) * 100) / 100;
-  // Ore decimali → "H:MM". 0.5 resta 0:30, 0.67 resta 0:40: Excel non le mostra come percentuale.
   const oreHM = (h) => {
     const min = Math.round(Number(h || 0) * 60);
     const sign = min < 0 ? "-" : "";
     const abs = Math.abs(min);
     return `${sign}${Math.floor(abs / 60)}:${String(abs % 60).padStart(2, "0")}`;
   };
-  // Somma: formato orario, e i minuti accanto se non è un'ora piena (90 min → 1h 30min).
-  const oreSomma = (h) => {
+  // Somma straordinari in ore decimali, per eccesso al quarto d'ora (40 min → 0.75).
+  const ceilQuarter = (h) => {
     const min = Math.round(Number(h || 0) * 60);
-    const sign = min < 0 ? "-" : "";
-    const abs = Math.abs(min);
-    const hh = Math.floor(abs / 60);
-    const mm = abs % 60;
-    return mm ? `${sign}${hh}h ${mm}min` : `${sign}${hh}h`;
+    return Math.ceil(min / 15) * 15 / 60;
   };
   const asTime = (cell) => { cell.numFmt = "@"; cell.alignment = { horizontal: "center" }; };
   const MESI = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno","Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"];
   const COLORS = ["FF1F6B4A","FF2B5F8A","FF8A5410","FF5B3F86","FF9A3B3B","FF1D6A6A","FF3E5C3A","FF6B4C2A"];
-
-  function sheetName(name, used) {
-    let base = String(name || "Utente").replace(/[\\/*?:\[\]]/g, " ").replace(/\s+/g, " ").trim().slice(0, 28) || "Utente";
-    let n = base;
-    let i = 2;
-    while (used.has(n)) { n = `${base.slice(0, 25)} ${i++}`; }
-    used.add(n);
-    return n;
-  }
   function paintHeader(row, argb) {
     row.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
     row.fill = { type: "pattern", pattern: "solid", fgColor: { argb } };
@@ -698,124 +683,36 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
   try {
     const users = (await pool.query("SELECT id, name, email FROM users WHERE role='user' ORDER BY name")).rows;
     const worklogs = (await pool.query("SELECT * FROM worklogs")).rows;
+    const people = users.map(u => ({
+      u,
+      logs: worklogs
+        .filter(w => w.user_id === u.id && inMonth(w.data))
+        .sort((a, b) => toISO(a.data).localeCompare(toISO(b.data)) || String(a.inizio || "").localeCompare(String(b.inizio || ""))),
+    }));
 
     const wb = new ExcelJS.Workbook();
     wb.creator = "Gestione ore";
     const titolo = `${MESI[month - 1] || month} ${year}`;
-    const usedNames = new Set(["Indice", "Foglio unico", "Giornaliero"]);
-
-    const people = users.map(u => {
-      const logs = worklogs
-        .filter(w => w.user_id === u.id && inMonth(w.data))
-        .sort((a, b) => toISO(a.data).localeCompare(toISO(b.data)) || String(a.inizio || "").localeCompare(String(b.inizio || "")));
-      return { u, logs };
-    });
-
-    // --- Indice: una riga per dipendente, così i 16 nomi si vedono subito ---
-    const idx = wb.addWorksheet("Indice", { views: [{ state: "frozen", ySplit: 2 }] });
-    idx.columns = [
-      { width: 28 }, { width: 32 }, { width: 16 }, { width: 16 }, { width: 16 }, { width: 22 },
-    ];
-    idx.mergeCells("A1:F1");
-    idx.getCell("A1").value = `Dipendenti · ${titolo}`;
-    paintHeader(idx.getRow(1), "FF1F4E3D");
-    ["Dipendente", "Email", "Giorni", "Ore lavorate", "Straordinari", "Foglio dettaglio"].forEach((h, i) => {
-      idx.getCell(2, i + 1).value = h;
-    });
-    paintHeader(idx.getRow(2), "FF3A7D6B");
-    people.forEach(({ u, logs }, i) => {
-      const ore = round2(logs.reduce((s, w) => s + Number(w.ore || 0), 0));
-      const straord = round2(logs.reduce((s, w) => s + Number(w.straordinari || 0), 0));
-      const tab = sheetName(u.name, usedNames);
-      const row = idx.addRow([u.name, u.email, logs.length, oreSomma(ore), oreSomma(straord), tab]);
-      asTime(row.getCell(4));
-      asTime(row.getCell(5));
-      row.getCell(6).value = { text: tab, hyperlink: `#'${tab.replace(/'/g, "''")}'!A1` };
-      row.getCell(6).font = { color: { argb: "FF1F4E8A" }, underline: true };
-      if (i % 2 === 1) row.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF4F7F5" } };
-      row.alignment = { vertical: "middle" };
-      u._sheet = tab;
-    });
-    idx.autoFilter = { from: "A2", to: "F2" };
-    idx.getRow(2).height = 22;
-    const totOre = people.reduce((s, p) => s + p.logs.reduce((a, w) => a + Number(w.ore || 0), 0), 0);
-    const totStr = people.reduce((s, p) => s + p.logs.reduce((a, w) => a + Number(w.straordinari || 0), 0), 0);
-    const idxTot = idx.addRow(["TOTALE", "", people.reduce((s, p) => s + p.logs.length, 0), oreSomma(totOre), oreSomma(totStr), ""]);
-    idxTot.font = { bold: true };
-    idxTot.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7F0EC" } };
-    asTime(idxTot.getCell(4));
-    asTime(idxTot.getCell(5));
-
-    // --- Foglio unico: tutte le giornate di tutti, una riga per giornata, filtrabile ---
-    const unico = wb.addWorksheet("Foglio unico", {
-      views: [{ state: "frozen", ySplit: 2 }],
-      pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 },
-    });
-    unico.columns = [
-      { width: 26 }, { width: 30 }, { width: 14 }, { width: 12 }, { width: 12 }, { width: 12 },
-      { width: 14 }, { width: 16 }, { width: 16 }, { width: 28 },
-    ];
-    unico.mergeCells("A1:J1");
-    unico.getCell("A1").value = `Tutti i dipendenti · ${titolo} · una riga per giornata`;
-    paintHeader(unico.getRow(1), "FF1F4E3D");
-    ["Dipendente", "Email", "Data", "Giorno", "Inizio", "Fine", "Pausa (min)", "Ore lavorate", "Straordinari", "Sede / cantiere"].forEach((h, i) => {
-      unico.getCell(2, i + 1).value = h;
-    });
-    paintHeader(unico.getRow(2), "FF3A7D6B");
-    const flat = [];
-    people.forEach(({ u, logs }) => {
-      logs.forEach(w => flat.push({ u, w }));
-    });
-    flat.sort((a, b) => a.u.name.localeCompare(b.u.name, "it") || toISO(a.w.data).localeCompare(toISO(b.w.data)) || String(a.w.inizio || "").localeCompare(String(b.w.inizio || "")));
-    let lastName = "";
-    let band = 0;
-    if (flat.length === 0) {
-      unico.addRow(["Nessuna giornata registrata in questo mese"]);
-    } else {
-      flat.forEach(({ u, w }) => {
-        if (u.name !== lastName) { band += 1; lastName = u.name; }
-        const iso = toISO(w.data);
-        const sede = w.cantiere ? `Cantiere${w.nome_cantiere ? ": " + w.nome_cantiere : ""}` : "Sede";
-        const row = unico.addRow([
-          u.name, u.email, fmtD(w.data), weekday(iso), w.inizio || "", w.fine || "",
-          Number(w.pausa || 0), oreHM(w.ore), oreHM(w.straordinari), sede,
-        ]);
-        asTime(row.getCell(8));
-        asTime(row.getCell(9));
-        if (band % 2 === 0) row.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF4F7F5" } };
-        if (Number(w.straordinari) > 0) row.getCell(9).font = { bold: true, color: { argb: "FF8A5410" } };
-      });
-    }
-    unico.autoFilter = { from: "A2", to: "J2" };
-    unico.pageSetup.printTitlesRow = "1:2";
-    const uTot = unico.addRow(["TOTALE", "", "", "", "", "", "", oreSomma(totOre), oreSomma(totStr), ""]);
-    uTot.font = { bold: true };
-    uTot.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7F0EC" } };
-    asTime(uTot.getCell(8));
-    asTime(uTot.getCell(9));
-
-    // --- Giornaliero: un blocco colorato per persona, righe non sommate ---
     const ws = wb.addWorksheet("Giornaliero", {
       views: [{ state: "frozen", ySplit: 2 }],
       pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 },
     });
     ws.columns = [
-      { width: 14 }, { width: 12 }, { width: 12 }, { width: 12 }, { width: 16 }, { width: 18 }, { width: 14 }, { width: 28 },
+      { width: 14 }, { width: 12 }, { width: 12 }, { width: 12 }, { width: 14 }, { width: 16 }, { width: 16 }, { width: 28 },
     ];
     ws.mergeCells("A1:H1");
-    ws.getCell("A1").value = `Ore giornaliere · ${titolo} · una riga per giornata, non il totale del mese`;
+    ws.getCell("A1").value = `Ore giornaliere · ${titolo} · totale straordinari in ore decimali, per eccesso al quarto d'ora`;
     paintHeader(ws.getRow(1), "FF1F4E3D");
-    const headers = ["Data", "Giorno", "Inizio", "Fine", "Pausa (min)", "Ore lavorate", "Straordinari", "Sede / cantiere"];
-    headers.forEach((h, i) => { ws.getCell(2, i + 1).value = h; });
+    ["Data", "Giorno", "Inizio", "Fine", "Pausa (min)", "Ore lavorate", "Straordinari", "Sede / cantiere"].forEach((h, i) => {
+      ws.getCell(2, i + 1).value = h;
+    });
     paintHeader(ws.getRow(2), "FF3A7D6B");
-    ws.autoFilter = { from: "A2", to: "H2" };
     ws.pageSetup.printTitlesRow = "1:2";
 
     people.forEach(({ u, logs }, i) => {
-      const color = COLORS[i % COLORS.length];
       const banner = ws.addRow([`${u.name}  ·  ${u.email}`]);
       ws.mergeCells(banner.number, 1, banner.number, 8);
-      paintHeader(banner, color);
+      paintHeader(banner, COLORS[i % COLORS.length]);
       banner.height = 24;
       if (logs.length === 0) {
         const empty = ws.addRow(["Nessuna giornata registrata in questo mese"]);
@@ -829,64 +726,22 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
             fmtD(w.data), weekday(iso), w.inizio || "", w.fine || "",
             Number(w.pausa || 0), oreHM(w.ore), oreHM(w.straordinari), sede,
           ]);
-          row.outlineLevel = 1;
           asTime(row.getCell(6));
           asTime(row.getCell(7));
           if (Number(w.straordinari) > 0) row.getCell(7).font = { bold: true, color: { argb: "FF8A5410" } };
           ore += Number(w.ore || 0);
           straord += Number(w.straordinari || 0);
         });
-        const tot = ws.addRow(["Totale mese", "", "", "", "", oreSomma(ore), oreSomma(straord), `${logs.length} giornate`]);
+        const tot = ws.addRow([
+          "Totale mese", "", "", "", "", oreHM(ore), ceilQuarter(straord), `${logs.length} giornate`,
+        ]);
         tot.font = { bold: true };
         tot.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7F0EC" } };
         asTime(tot.getCell(6));
-        asTime(tot.getCell(7));
+        tot.getCell(7).numFmt = "0.00";
+        tot.getCell(7).alignment = { horizontal: "center" };
       }
       ws.addRow([]);
-    });
-
-    // --- Un foglio per dipendente, così con 16 persone ognuno sta da solo ---
-    people.forEach(({ u, logs }, i) => {
-      const tab = u._sheet;
-      const sh = wb.addWorksheet(tab, { views: [{ state: "frozen", ySplit: 3 }] });
-      sh.columns = [
-        { width: 14 }, { width: 12 }, { width: 12 }, { width: 12 }, { width: 16 }, { width: 18 }, { width: 18 }, { width: 28 },
-      ];
-      sh.mergeCells("A1:H1");
-      sh.getCell("A1").value = `${u.name} · ${u.email} · ${titolo}`;
-      paintHeader(sh.getRow(1), COLORS[i % COLORS.length]);
-      sh.mergeCells("A2:H2");
-      sh.getCell("A2").value = "Una riga per giornata. Le ore non sono sommate: il totale è solo nell'ultima riga.";
-      sh.getRow(2).font = { italic: true, color: { argb: "FF4B5563" } };
-      ["Data", "Giorno", "Inizio", "Fine", "Pausa (min)", "Ore lavorate", "Straordinari", "Sede / cantiere"].forEach((h, c) => {
-        sh.getCell(3, c + 1).value = h;
-      });
-      paintHeader(sh.getRow(3), "FF3A7D6B");
-      if (logs.length === 0) {
-        sh.addRow(["Nessuna giornata registrata in questo mese"]);
-      } else {
-        let ore = 0, straord = 0;
-        logs.forEach(w => {
-          const iso = toISO(w.data);
-          const sede = w.cantiere ? `Cantiere${w.nome_cantiere ? ": " + w.nome_cantiere : ""}` : "Sede";
-          const row = sh.addRow([
-            fmtD(w.data), weekday(iso), w.inizio || "", w.fine || "",
-            Number(w.pausa || 0), oreHM(w.ore), oreHM(w.straordinari), sede,
-          ]);
-          asTime(row.getCell(6));
-          asTime(row.getCell(7));
-          if (Number(w.straordinari) > 0) row.getCell(7).font = { bold: true, color: { argb: "FF8A5410" } };
-          ore += Number(w.ore || 0);
-          straord += Number(w.straordinari || 0);
-        });
-        const tot = sh.addRow(["Totale mese", "", "", "", "", oreSomma(ore), oreSomma(straord), `${logs.length} giornate`]);
-        tot.font = { bold: true };
-        tot.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7F0EC" } };
-        asTime(tot.getCell(6));
-        asTime(tot.getCell(7));
-      }
-      sh.autoFilter = { from: "A3", to: "H3" };
-      sh.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 };
     });
 
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
