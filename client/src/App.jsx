@@ -33,6 +33,12 @@ const iso = (v) => {
 const fmtDate = (v) => { const s = iso(v); if (!s) return ""; const [y,m,d]=s.split("-"); return `${d}/${m}/${y}`; };
 const isFuture = (v) => iso(v) >= todayISO();
 const round2 = (n) => Math.round(n * 100) / 100;
+const oreHM = (n) => {
+  const min = Math.round(Number(n || 0) * 60);
+  const abs = Math.abs(min);
+  return `${min < 0 ? "-" : ""}${Math.floor(abs / 60)}:${String(abs % 60).padStart(2, "0")}`;
+};
+const parseOre = (v) => round2(parseFloat(String(v ?? "").replace(",", ".")) || 0);
 const initials = (name) => name.split(" ").map(w=>w[0]).slice(0,2).join("").toUpperCase();
 function hoursBetween(a,b){ const [h1,m1]=a.split(":").map(Number),[h2,m2]=b.split(":").map(Number); return ((h2*60+m2)-(h1*60+m1))/60; }
 function eachDay(start,end){
@@ -588,7 +594,7 @@ function UserWorklogs({ logs, detected, reload }) {
             <div key={l.id} className="logrow">
               <div className="logdate">{fmtDate(l.data)}</div>
               <div className="logtimes">{l.mattino_inizio ? `Matt ${l.mattino_inizio}–${l.mattino_fine} · Pom ${l.pomeriggio_inizio}–${l.pomeriggio_fine}` : (l.inizio ? `${l.inizio}–${l.fine} · pausa ${l.pausa}′` : "Totale ore")} {l.cantiere ? <span className="sitetag cantiere">In cantiere{l.nome_cantiere?`: ${l.nome_cantiere}`:""}</span> : <span className="sitetag sede">In sede</span>}</div>
-              <div className="loghours">{round2(Number(l.ore))}h {straord>0 && <span className="straordtag">+{straord}h str.</span>}</div>
+              <div className="loghours">{round2(Number(l.ore))}h {straord>0 && <span className="straordtag">+{oreHM(straord)} str.</span>}</div>
               <div className="logcompare">{det ? <span className={diff===0?"cmp ok":"cmp warn"}>Rilevate {round2(Number(det.ore))}h {diff!==0&&`(Δ ${diff>0?"+":""}${diff}h)`}</span> : <span className="muted small">nessun rilevamento</span>}</div>
               <div className="logactions">
                 {modificabile ? (
@@ -1024,7 +1030,7 @@ function AdminUserWorklogs({ user, logs, detected, reload }) {
   const save = async () => {
     setErr("");
     if (f.fine<=f.inizio) return setErr("L'orario di fine deve essere dopo l'inizio.");
-    const payload = { data:f.data, inizio:f.inizio, fine:f.fine, pausa:parseInt(f.pausa||"0",10), ore:round2(parseFloat(f.ore||"0")), straordinari:round2(parseFloat(f.straordinari||"0")), cantiere:f.cantiere, nomeCantiere:f.cantiere?f.nomeCantiere:"" };
+    const payload = { data:f.data, inizio:f.inizio, fine:f.fine, pausa:parseInt(f.pausa||"0",10), ore:parseOre(f.ore), straordinari:parseOre(f.straordinari), cantiere:f.cantiere, nomeCantiere:f.cantiere?f.nomeCantiere:"" };
     try { await api.put(`/api/worklogs/${f.id}`, payload); cancel(); reload(); }
     catch(e){ setErr(e.message); }
   };
@@ -1072,7 +1078,7 @@ function AdminUserWorklogs({ user, logs, detected, reload }) {
             <div key={l.id} className="logrow">
               <div className="logdate">{fmtDate(l.data)}</div>
               <div className="logtimes">{l.mattino_inizio ? `Matt ${l.mattino_inizio}–${l.mattino_fine} · Pom ${l.pomeriggio_inizio}–${l.pomeriggio_fine}` : (l.inizio ? `${l.inizio}–${l.fine} · pausa ${l.pausa}′` : "Totale ore")} {l.cantiere ? <span className="sitetag cantiere">In cantiere{l.nome_cantiere?`: ${l.nome_cantiere}`:""}</span> : <span className="sitetag sede">In sede</span>}</div>
-              <div className="loghours">{round2(Number(l.ore))}h {straord>0 && <span className="straordtag">+{straord}h str.</span>}</div>
+              <div className="loghours">{round2(Number(l.ore))}h {straord>0 && <span className="straordtag">+{oreHM(straord)} str.</span>}</div>
               <div className="logcompare">{det ? <span className={diff===0?"cmp ok":"cmp warn"}>Rilevate {round2(Number(det.ore))}h {diff!==0&&`(Δ ${diff>0?"+":""}${diff}h)`}</span> : <span className="muted small">nessun rilevamento</span>}</div>
               <div className="logactions">
                 <button className="btn tiny" onClick={()=>startEdit(l)}>Modifica</button>
@@ -1263,7 +1269,7 @@ function MonthlySummary({ reqs, logs, detected, cursor, setCursor, showCompare }
       <MonthNav cursor={cursor} setCursor={setCursor} />
       <div className="stats stats5">
         <Stat label="Ore lavorate" value={`${round2(oreLav)}h`} color={TIPI.lavoro.color} />
-        <Stat label="Straordinari" value={`${round2(oreStr)}h`} color="#b3701c" />
+        <Stat label="Straordinari" value={oreHM(oreStr)} color="#b3701c" />
         <Stat label="Permessi" value={`${round2(oreP)}h`} color={TIPI.permesso.color} />
         <Stat label="Ferie" value={`${gF}g`} color={TIPI.ferie.color} />
         <Stat label="Assenze" value={`${gA}g`} color={TIPI.assenza.color} />
