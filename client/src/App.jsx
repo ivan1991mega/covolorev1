@@ -38,6 +38,14 @@ const oreHM = (n) => {
   const abs = Math.abs(min);
   return `${min < 0 ? "-" : ""}${Math.floor(abs / 60)}:${String(abs % 60).padStart(2, "0")}`;
 };
+const oreSomma = (n) => {
+  const min = Math.round(Number(n || 0) * 60);
+  const sign = min < 0 ? "-" : "";
+  const abs = Math.abs(min);
+  const hh = Math.floor(abs / 60);
+  const mm = abs % 60;
+  return mm ? `${sign}${hh}h ${mm}min` : `${sign}${hh}h`;
+};
 const parseOre = (v) => round2(parseFloat(String(v ?? "").replace(",", ".")) || 0);
 const initials = (name) => name.split(" ").map(w=>w[0]).slice(0,2).join("").toUpperCase();
 function hoursBetween(a,b){ const [h1,m1]=a.split(":").map(Number),[h2,m2]=b.split(":").map(Number); return ((h2*60+m2)-(h1*60+m1))/60; }
@@ -1269,7 +1277,7 @@ function MonthlySummary({ reqs, logs, detected, cursor, setCursor, showCompare }
       <MonthNav cursor={cursor} setCursor={setCursor} />
       <div className="stats stats5">
         <Stat label="Ore lavorate" value={`${round2(oreLav)}h`} color={TIPI.lavoro.color} />
-        <Stat label="Straordinari" value={oreHM(oreStr)} color="#b3701c" />
+        <Stat label="Straordinari" value={oreSomma(oreStr)} color="#b3701c" />
         <Stat label="Permessi" value={`${round2(oreP)}h`} color={TIPI.permesso.color} />
         <Stat label="Ferie" value={`${gF}g`} color={TIPI.ferie.color} />
         <Stat label="Assenze" value={`${gA}g`} color={TIPI.assenza.color} />

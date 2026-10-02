@@ -667,6 +667,15 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
     const abs = Math.abs(min);
     return `${sign}${Math.floor(abs / 60)}:${String(abs % 60).padStart(2, "0")}`;
   };
+  // Somma: formato orario, e i minuti accanto se non è un'ora piena (90 min → 1h 30min).
+  const oreSomma = (h) => {
+    const min = Math.round(Number(h || 0) * 60);
+    const sign = min < 0 ? "-" : "";
+    const abs = Math.abs(min);
+    const hh = Math.floor(abs / 60);
+    const mm = abs % 60;
+    return mm ? `${sign}${hh}h ${mm}min` : `${sign}${hh}h`;
+  };
   const asTime = (cell) => { cell.numFmt = "@"; cell.alignment = { horizontal: "center" }; };
   const MESI = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno","Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"];
   const COLORS = ["FF1F6B4A","FF2B5F8A","FF8A5410","FF5B3F86","FF9A3B3B","FF1D6A6A","FF3E5C3A","FF6B4C2A"];
@@ -705,7 +714,7 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
     // --- Indice: una riga per dipendente, così i 16 nomi si vedono subito ---
     const idx = wb.addWorksheet("Indice", { views: [{ state: "frozen", ySplit: 2 }] });
     idx.columns = [
-      { width: 28 }, { width: 32 }, { width: 16 }, { width: 16 }, { width: 18 }, { width: 22 },
+      { width: 28 }, { width: 32 }, { width: 16 }, { width: 16 }, { width: 16 }, { width: 22 },
     ];
     idx.mergeCells("A1:F1");
     idx.getCell("A1").value = `Dipendenti · ${titolo}`;
@@ -718,7 +727,7 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
       const ore = round2(logs.reduce((s, w) => s + Number(w.ore || 0), 0));
       const straord = round2(logs.reduce((s, w) => s + Number(w.straordinari || 0), 0));
       const tab = sheetName(u.name, usedNames);
-      const row = idx.addRow([u.name, u.email, logs.length, oreHM(ore), oreHM(straord), tab]);
+      const row = idx.addRow([u.name, u.email, logs.length, oreSomma(ore), oreSomma(straord), tab]);
       asTime(row.getCell(4));
       asTime(row.getCell(5));
       row.getCell(6).value = { text: tab, hyperlink: `#'${tab.replace(/'/g, "''")}'!A1` };
@@ -729,6 +738,13 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
     });
     idx.autoFilter = { from: "A2", to: "F2" };
     idx.getRow(2).height = 22;
+    const totOre = people.reduce((s, p) => s + p.logs.reduce((a, w) => a + Number(w.ore || 0), 0), 0);
+    const totStr = people.reduce((s, p) => s + p.logs.reduce((a, w) => a + Number(w.straordinari || 0), 0), 0);
+    const idxTot = idx.addRow(["TOTALE", "", people.reduce((s, p) => s + p.logs.length, 0), oreSomma(totOre), oreSomma(totStr), ""]);
+    idxTot.font = { bold: true };
+    idxTot.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7F0EC" } };
+    asTime(idxTot.getCell(4));
+    asTime(idxTot.getCell(5));
 
     // --- Foglio unico: tutte le giornate di tutti, una riga per giornata, filtrabile ---
     const unico = wb.addWorksheet("Foglio unico", {
@@ -772,6 +788,11 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
     }
     unico.autoFilter = { from: "A2", to: "J2" };
     unico.pageSetup.printTitlesRow = "1:2";
+    const uTot = unico.addRow(["TOTALE", "", "", "", "", "", "", oreSomma(totOre), oreSomma(totStr), ""]);
+    uTot.font = { bold: true };
+    uTot.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7F0EC" } };
+    asTime(uTot.getCell(8));
+    asTime(uTot.getCell(9));
 
     // --- Giornaliero: un blocco colorato per persona, righe non sommate ---
     const ws = wb.addWorksheet("Giornaliero", {
@@ -815,7 +836,7 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
           ore += Number(w.ore || 0);
           straord += Number(w.straordinari || 0);
         });
-        const tot = ws.addRow(["Totale mese", "", "", "", "", oreHM(ore), oreHM(straord), `${logs.length} giornate`]);
+        const tot = ws.addRow(["Totale mese", "", "", "", "", oreSomma(ore), oreSomma(straord), `${logs.length} giornate`]);
         tot.font = { bold: true };
         tot.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7F0EC" } };
         asTime(tot.getCell(6));
@@ -858,7 +879,7 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
           ore += Number(w.ore || 0);
           straord += Number(w.straordinari || 0);
         });
-        const tot = sh.addRow(["Totale mese", "", "", "", "", oreHM(ore), oreHM(straord), `${logs.length} giornate`]);
+        const tot = sh.addRow(["Totale mese", "", "", "", "", oreSomma(ore), oreSomma(straord), `${logs.length} giornate`]);
         tot.font = { bold: true };
         tot.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7F0EC" } };
         asTime(tot.getCell(6));
@@ -945,6 +966,22 @@ app.get("/api/export-user/:userId", auth, adminOnly, async (req, res) => {
       row.getCell(6).numFmt = "@";
     });
     if (worklogs.length === 0) ws1.addRow({ data: "Nessuna rilevazione nel mese" });
+    else {
+      const oreSomma = (h) => {
+        const min = Math.round(Number(h || 0) * 60);
+        const hh = Math.floor(Math.abs(min) / 60);
+        const mm = Math.abs(min) % 60;
+        return mm ? `${hh}h ${mm}min` : `${hh}h`;
+      };
+      const tot = ws1.addRow({
+        data: "Totale mese",
+        ore: oreSomma(worklogs.reduce((s, w) => s + Number(w.ore || 0), 0)),
+        straord: oreSomma(worklogs.reduce((s, w) => s + Number(w.straordinari || 0), 0)),
+      });
+      tot.font = { bold: true };
+      tot.getCell(5).numFmt = "@";
+      tot.getCell(6).numFmt = "@";
+    }
 
     // --- Foglio 2: Richieste ---
     const ws2 = wb.addWorksheet("Richieste");
