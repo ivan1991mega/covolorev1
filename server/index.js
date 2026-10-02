@@ -295,6 +295,15 @@ async function chiudiTimbratura(p, fineDate, extra = {}) {
   const dataISO = `${entrata.getFullYear()}-${String(entrata.getMonth()+1).padStart(2,"0")}-${String(entrata.getDate()).padStart(2,"0")}`;
   const cantiere = !!extra.cantiere;
   const nomeCantiere = cantiere ? String(extra.nomeCantiere || "").trim() : "";
+  const already = await pool.query(
+    "SELECT 1 FROM worklogs WHERE user_id=$1 AND data=$2",
+    [p.user_id, dataISO]
+  );
+  if (already.rowCount) {
+    const err = new Error("Hai già una registrazione per questa giornata. Se è sbagliata, modificala: non se ne può aggiungere un'altra.");
+    err.status = 409;
+    throw err;
+  }
   const { rows: log } = await pool.query(
     `INSERT INTO worklogs (user_id, data, inizio, fine, pausa, ore, straordinari, cantiere, nome_cantiere)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
@@ -336,6 +345,8 @@ app.post("/api/punch/entrata", auth, async (req, res) => {
   try {
     const exists = await pool.query("SELECT 1 FROM punch WHERE user_id=$1", [req.user.id]);
     if (exists.rowCount) return res.status(400).json({ error: "Hai già una timbratura in corso." });
+    const gia = await pool.query("SELECT 1 FROM worklogs WHERE user_id=$1 AND data=$2", [req.user.id, todayItaly()]);
+    if (gia.rowCount) return res.status(409).json({ error: "Hai già registrato la giornata di oggi. Puoi solo modificarla." });
     const { rows } = await pool.query(
       "INSERT INTO punch (user_id, entrata, stato, pausa_totale) VALUES ($1, now(), 'attivo', 0) RETURNING *",
       [req.user.id]
@@ -413,7 +424,10 @@ app.post("/api/punch/uscita", auth, async (req, res) => {
     if (!p) return res.status(400).json({ error: "Nessuna timbratura in corso." });
     const result = await chiudiTimbratura(p, new Date(), { cantiere: req.body.cantiere, nomeCantiere: req.body.nomeCantiere });
     res.json(result);
-  } catch (e) { console.error(e); res.status(500).json({ error: "Errore nell'uscita." }); }
+  } catch (e) {
+    console.error(e);
+    res.status(e.status || 500).json({ error: e.status ? e.message : "Errore nell'uscita." });
+  }
 });
 
 // Annulla la timbratura in corso senza registrare
@@ -453,6 +467,13 @@ app.post("/api/worklogs", auth, async (req, res) => {
   }
   const nomeCant = cantiere ? String(nomeCantiere || "").trim() : "";
   try {
+    const already = await pool.query(
+      "SELECT 1 FROM worklogs WHERE user_id=$1 AND data=$2",
+      [req.user.id, data]
+    );
+    if (already.rowCount) {
+      return res.status(409).json({ error: "C'è già una registrazione per questa giornata. Modifica quella esistente." });
+    }
     const { rows } = await pool.query(
       `INSERT INTO worklogs (user_id, data, inizio, fine, pausa, ore, straordinari, cantiere, nome_cantiere,
                              mattino_inizio, mattino_fine, pomeriggio_inizio, pomeriggio_fine)
@@ -485,6 +506,13 @@ app.put("/api/worklogs/:id", auth, async (req, res) => {
     // Impedisce anche di spostare una registrazione odierna a una data passata.
     if (req.user.role !== "admin" && !isTodayItaly(data)) {
       return res.status(403).json({ error: "Puoi impostare solo la data di oggi." });
+    }
+    const clash = await pool.query(
+      "SELECT 1 FROM worklogs WHERE user_id=$1 AND data=$2 AND id<>$3",
+      [w.user_id, data, req.params.id]
+    );
+    if (clash.rowCount) {
+      return res.status(409).json({ error: "In quel giorno c'è già un'altra registrazione." });
     }
     const { rows: upd } = await pool.query(
       `UPDATE worklogs SET data=$1, inizio=$2, fine=$3, pausa=$4, ore=$5, straordinari=$6, cantiere=$7, nome_cantiere=$8,

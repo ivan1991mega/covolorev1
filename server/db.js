@@ -96,6 +96,13 @@ export async function initDb() {
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT false;`);
   // Migrazione: colonna per la pausa fissa a conto alla rovescia.
   await pool.query(`ALTER TABLE punch ADD COLUMN IF NOT EXISTS pausa_fine TIMESTAMPTZ;`);
+  // Una sola registrazione per utente e giorno. Se ci sono già doppioni, l'indice non viene creato
+  // finché non si elimina la riga in più: il controllo in inserimento resta comunque attivo.
+  try {
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS worklogs_user_day ON worklogs (user_id, data);`);
+  } catch (e) {
+    console.error("Indice univoco giornate non creato (ci sono registrazioni doppie):", e.message);
+  }
 
   // Seed admin se il database è vuoto.
   const { rows } = await pool.query("SELECT COUNT(*)::int AS n FROM users");

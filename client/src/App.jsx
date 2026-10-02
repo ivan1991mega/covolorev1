@@ -467,6 +467,7 @@ function PunchClock({ reload }) {
 
 function UserWorklogs({ logs, detected, reload }) {
   const oggi = todayISO();
+  const giaOggi = logs.some(l => iso(l.data) === oggi);
   const empty = { id:null, data:oggi, modo:"unico",
     inizio:"09:00", fine:"18:00", pausa:"60", straordinari:"0",
     mattinoInizio:"08:00", mattinoFine:"12:00", pomeriggioInizio:"13:00", pomeriggioFine:"17:00",
@@ -540,6 +541,9 @@ function UserWorklogs({ logs, detected, reload }) {
   return (
     <div className="stack">
       <h2>Ore lavorate</h2>
+      {giaOggi && !editing ? (
+        <div className="card"><p className="muted">Hai già una registrazione per oggi. Puoi solo modificarla dalla lista: non se ne può aggiungere un'altra nello stesso giorno.</p></div>
+      ) : (
       <div className="card formcard">
         {editing && <div className="editbanner">Stai modificando la registrazione del {fmtDate(f.data)}</div>}
         <div className="modoswitch">
@@ -591,6 +595,7 @@ function UserWorklogs({ logs, detected, reload }) {
           <button className="btn primary" onClick={save}>{editing?"Salva modifiche":"Registra ore"}</button>
         </div>
       </div>
+      )}
       {logs.length===0 && <div className="empty">Nessuna giornata registrata.</div>}
       <div className="list">
         {logs.map(l=>{
@@ -616,7 +621,7 @@ function UserWorklogs({ logs, detected, reload }) {
           );
         })}
       </div>
-      <p className="muted small">Puoi inserire e modificare le ore solo per la giornata di oggi. Dalla mezzanotte le ore del giorno si bloccano.</p>
+      <p className="muted small">Puoi inserire una sola registrazione per giornata, e solo per oggi. Dalla mezzanotte le ore del giorno si bloccano.</p>
     </div>
   );
 }
