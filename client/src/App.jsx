@@ -178,6 +178,15 @@ function UserApp({ me, onLogout, theme, toggleTheme }) {
   useEffect(() => { reload(); }, [reload]);
 
   const unread = msgs.filter(m=>!m.read && !m.archived).length;
+  // Giorni inseriti dall'admin in Rilevazione, se il dipendente non ha una registrazione propria.
+  const logsConAdmin = useMemo(() => {
+    const giorni = new Set(logs.map(l => iso(l.data)));
+    const extra = detected.filter(d => !giorni.has(iso(d.data))).map(d => ({
+      id: `det-${d.id}`, data: d.data, inizio: "", fine: "", pausa: 0, ore: d.ore, straordinari: 0,
+      cantiere: false, nome_cantiere: "", fonte: "admin",
+    }));
+    return [...logs, ...extra];
+  }, [logs, detected]);
 
   return (
     <div className="wrap">
@@ -191,10 +200,10 @@ function UserApp({ me, onLogout, theme, toggleTheme }) {
           Comunicazioni{unread>0 && <span className="badge">{unread}</span>}</button>
       </nav>
       <main className="main">
-        {tab==="calendario" && <UserCalendar cursor={cursor} setCursor={setCursor} reqs={reqs} logs={logs} onOpenRequest={openRequestFromCalendar} />}
+        {tab==="calendario" && <UserCalendar cursor={cursor} setCursor={setCursor} reqs={reqs} logs={logsConAdmin} onOpenRequest={openRequestFromCalendar} />}
         {tab==="richieste" && <UserRequests me={me} reqs={reqs} reload={reload} openReq={openReq} clearOpenReq={()=>setOpenReq(null)} />}
-        {tab==="ore" && <><PunchClock reload={reload} /><UserWorklogs logs={logs} detected={detected} reload={reload} /></>}
-        {tab==="riepilogo" && <MonthlySummary reqs={reqs} logs={logs} detected={detected} cursor={cursor} setCursor={setCursor} showCompare />}
+        {tab==="ore" && <><PunchClock reload={reload} /><UserWorklogs logs={logsConAdmin} detected={detected} reload={reload} /></>}
+        {tab==="riepilogo" && <MonthlySummary reqs={reqs} logs={logsConAdmin} detected={detected} cursor={cursor} setCursor={setCursor} showCompare />}
         {tab==="messaggi" && <Messages msgs={msgs} me={me} reload={reload} />}
       </main>
       <style>{CSS}</style>
@@ -602,11 +611,11 @@ function UserWorklogs({ logs, detected, reload }) {
           const det = detected.find(x=>iso(x.data)===iso(l.data));
           const diff = det ? round2(Number(l.ore)-Number(det.ore)) : null;
           const straord = Number(l.straordinari||0);
-          const modificabile = iso(l.data) === oggi; // solo oggi è modificabile dall'utente
+          const modificabile = l.fonte !== "admin" && iso(l.data) === oggi; // solo oggi è modificabile dall'utente
           return (
             <div key={l.id} className="logrow">
               <div className="logdate">{fmtDate(l.data)}</div>
-              <div className="logtimes">{l.mattino_inizio ? `Matt ${l.mattino_inizio}–${l.mattino_fine} · Pom ${l.pomeriggio_inizio}–${l.pomeriggio_fine}` : (l.inizio ? `${l.inizio}–${l.fine} · pausa ${l.pausa}′` : "Totale ore")} {l.cantiere ? <span className="sitetag cantiere">In cantiere{l.nome_cantiere?`: ${l.nome_cantiere}`:""}</span> : <span className="sitetag sede">In sede</span>}</div>
+              <div className="logtimes">{l.fonte==="admin" ? "Inserita dall'amministratore" : (l.mattino_inizio ? `Matt ${l.mattino_inizio}–${l.mattino_fine} · Pom ${l.pomeriggio_inizio}–${l.pomeriggio_fine}` : (l.inizio ? `${l.inizio}–${l.fine} · pausa ${l.pausa}′` : "Totale ore"))} {l.fonte==="admin" ? null : (l.cantiere ? <span className="sitetag cantiere">In cantiere{l.nome_cantiere?`: ${l.nome_cantiere}`:""}</span> : <span className="sitetag sede">In sede</span>)}</div>
               <div className="loghours">{round2(Number(l.ore))}h {straord>0 && <span className="straordtag">+{oreHM(straord)} str.</span>}</div>
               <div className="logcompare">{det ? <span className={diff===0?"cmp ok":"cmp warn"}>Rilevate {round2(Number(det.ore))}h {diff!==0&&`(Δ ${diff>0?"+":""}${diff}h)`}</span> : <span className="muted small">nessun rilevamento</span>}</div>
               <div className="logactions">
@@ -615,7 +624,7 @@ function UserWorklogs({ logs, detected, reload }) {
                     <button className="btn tiny" onClick={()=>startEdit(l)}>Modifica</button>
                     <button className="btn tiny danger" onClick={()=>remove(l)}>Elimina</button>
                   </>
-                ) : <span className="muted small locked">🔒 Bloccata</span>}
+                ) : <span className="muted small locked">{l.fonte==="admin" ? "Admin" : "🔒 Bloccata"}</span>}
               </div>
             </div>
           );
@@ -895,6 +904,11 @@ function AdminUsers({ users, reqs, logs, detected, selected, setSelected, cursor
     const uReqs = reqs.filter(r=>r.user_id===u.id);
     const uLogs = logs.filter(w=>w.user_id===u.id);
     const uDet = detected.filter(d=>d.user_id===u.id);
+    const giorniLog = new Set(uLogs.map(l => iso(l.data)));
+    const uLogsVis = [...uLogs, ...uDet.filter(d => !giorniLog.has(iso(d.data))).map(d => ({
+      id: `det-${d.id}`, data: d.data, inizio: "", fine: "", pausa: 0, ore: d.ore, straordinari: 0,
+      cantiere: false, nome_cantiere: "", fonte: "admin", user_id: u.id,
+    }))];
     return (
       <div className="stack">
         <button className="btn ghost" onClick={()=>setSelected(null)}>← Tutti gli utenti</button>
@@ -904,8 +918,8 @@ function AdminUsers({ users, reqs, logs, detected, selected, setSelected, cursor
         </div>
         <ResetPassword user={u} />
         {u.role!=="admin" && <UserExportBox user={u} />}
-        <MonthlySummary reqs={uReqs} logs={uLogs} detected={uDet} cursor={cursor} setCursor={setCursor} showCompare />
-        <AdminUserWorklogs user={u} logs={uLogs} detected={uDet} reload={reload} />
+        <MonthlySummary reqs={uReqs} logs={uLogsVis} detected={uDet} cursor={cursor} setCursor={setCursor} showCompare />
+        <AdminUserWorklogs user={u} logs={uLogsVis} detected={uDet} reload={reload} />
         <div className="card">
           <h3>Storico richieste</h3>
           {uReqs.length===0 && <div className="empty">Nessuna richiesta.</div>}
@@ -1034,17 +1048,22 @@ function ResetPassword({ user }) {
 
 // Modifica/eliminazione delle ore di un dipendente da parte dell'admin.
 function AdminUserWorklogs({ user, logs, detected, reload }) {
-  const [f, setF] = useState(null); // registrazione in modifica
+  const [f, setF] = useState(null); // registrazione in modifica o nuova giornata
   const [err, setErr] = useState("");
 
   const startEdit = (l) => { setErr(""); setF({ id:l.id, data:iso(l.data), inizio:l.inizio, fine:l.fine, pausa:String(l.pausa), ore:String(round2(Number(l.ore))), straordinari:String(round2(Number(l.straordinari||0))), cantiere:!!l.cantiere, nomeCantiere:l.nome_cantiere||"" }); };
+  const startNew = () => { setErr(""); setF({ id:null, data:todayISO(), inizio:"08:00", fine:"17:00", pausa:"60", ore:"8", straordinari:"0", cantiere:false, nomeCantiere:"" }); };
   const cancel = () => { setErr(""); setF(null); };
 
   const save = async () => {
     setErr("");
-    if (f.fine<=f.inizio) return setErr("L'orario di fine deve essere dopo l'inizio.");
-    const payload = { data:f.data, inizio:f.inizio, fine:f.fine, pausa:parseInt(f.pausa||"0",10), ore:parseOre(f.ore), straordinari:parseOre(f.straordinari), cantiere:f.cantiere, nomeCantiere:f.cantiere?f.nomeCantiere:"" };
-    try { await api.put(`/api/worklogs/${f.id}`, payload); cancel(); reload(); }
+    if (f.fine && f.inizio && f.fine<=f.inizio) return setErr("L'orario di fine deve essere dopo l'inizio.");
+    const payload = { data:f.data, inizio:f.inizio, fine:f.fine, pausa:parseInt(f.pausa||"0",10), ore:parseOre(f.ore), straordinari:parseOre(f.straordinari), cantiere:f.cantiere, nomeCantiere:f.cantiere?f.nomeCantiere:"", userId:user.id };
+    try {
+      if (f.id) await api.put(`/api/worklogs/${f.id}`, payload);
+      else await api.post("/api/worklogs", payload);
+      cancel(); reload();
+    }
     catch(e){ setErr(e.message); }
   };
   const remove = async (l) => { if(!confirm("Eliminare questa registrazione del dipendente?"))return; try { await api.del(`/api/worklogs/${l.id}`); reload(); } catch(e){ alert(e.message); } };
@@ -1053,11 +1072,14 @@ function AdminUserWorklogs({ user, logs, detected, reload }) {
 
   return (
     <div className="card">
-      <h3>Ore registrate del dipendente</h3>
-      <p className="muted small">Puoi correggere o eliminare le registrazioni in caso di incongruenza. Le modifiche sono immediate.</p>
+      <div className="rowbetween">
+        <h3>Ore registrate del dipendente</h3>
+        <button className="btn primary tiny" onClick={startNew}>+ Inserisci giornata</button>
+      </div>
+      <p className="muted small">Puoi inserire una giornata dimenticata (anche di un giorno passato), correggere o eliminare. Le ore finiscono sul dipendente e nell'export, non sull'account admin.</p>
       {f && (
         <div className="card formcard editcard">
-          <div className="editbanner">Modifica registrazione del {fmtDate(f.data)}</div>
+          <div className="editbanner">{f.id ? `Modifica registrazione del ${fmtDate(f.data)}` : `Nuova giornata per ${user.name}`}</div>
           <div className="grid3">
             <label className="field"><span>Data</span><input type="date" value={f.data} onChange={e=>setF({...f,data:e.target.value})} /></label>
             <label className="field"><span>Entrata</span><input type="time" value={f.inizio} onChange={e=>setF({...f,inizio:e.target.value})} /></label>
@@ -1078,7 +1100,7 @@ function AdminUserWorklogs({ user, logs, detected, reload }) {
               onChange={e=>setF({...f,nomeCantiere:e.target.value})} />
           </div>
           {err && <div className="alert">{err}</div>}
-          <div className="rowend"><button className="btn ghost" onClick={cancel}>Annulla</button><button className="btn primary" onClick={save}>Salva modifiche</button></div>
+          <div className="rowend"><button className="btn ghost" onClick={cancel}>Annulla</button><button className="btn primary" onClick={save}>{f.id ? "Salva modifiche" : "Salva giornata"}</button></div>
         </div>
       )}
       {sorted.length===0 && <div className="empty">Nessuna registrazione ore.</div>}
@@ -1094,8 +1116,10 @@ function AdminUserWorklogs({ user, logs, detected, reload }) {
               <div className="loghours">{round2(Number(l.ore))}h {straord>0 && <span className="straordtag">+{oreHM(straord)} str.</span>}</div>
               <div className="logcompare">{det ? <span className={diff===0?"cmp ok":"cmp warn"}>Rilevate {round2(Number(det.ore))}h {diff!==0&&`(Δ ${diff>0?"+":""}${diff}h)`}</span> : <span className="muted small">nessun rilevamento</span>}</div>
               <div className="logactions">
+                {l.fonte==="admin" ? <span className="muted small">Da rilevazione</span> : <>
                 <button className="btn tiny" onClick={()=>startEdit(l)}>Modifica</button>
                 <button className="btn tiny danger" onClick={()=>remove(l)}>Elimina</button>
+                </>}
               </div>
             </div>
           );
@@ -1138,7 +1162,7 @@ function AdminDetected({ users, logs, detected, reload }) {
   return (
     <div className="stack">
       <h2>Rilevazione ore</h2>
-      <p className="muted small">Inserisci le ore effettivamente rilevate. L'utente le vedrà confrontate con quelle dichiarate.</p>
+      <p className="muted small">Queste sono le ore rilevate (confronto). Se il dipendente non ha una registrazione quel giorno, vengono comunque mostrate a lui e nell'export. Per una giornata completa con entrata/uscita usa Utenti → Inserisci giornata.</p>
       <div className="card formcard">
         <div className="grid3">
           <label className="field"><span>Utente</span><select value={userId} onChange={e=>setUserId(Number(e.target.value))}>{users.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</select></label>
