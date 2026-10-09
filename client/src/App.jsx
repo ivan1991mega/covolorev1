@@ -181,10 +181,14 @@ function UserApp({ me, onLogout, theme, toggleTheme }) {
   // Giorni inseriti dall'admin in Rilevazione, se il dipendente non ha una registrazione propria.
   const logsConAdmin = useMemo(() => {
     const giorni = new Set(logs.map(l => iso(l.data)));
-    const extra = detected.filter(d => !giorni.has(iso(d.data))).map(d => ({
-      id: `det-${d.id}`, data: d.data, inizio: "", fine: "", pausa: 0, ore: d.ore, straordinari: 0,
-      cantiere: false, nome_cantiere: "", fonte: "admin",
-    }));
+    const extra = detected.filter(d => !giorni.has(iso(d.data))).map(d => {
+      const tot = Number(d.ore) || 0;
+      return {
+        id: `det-${d.id}`, data: d.data, inizio: "", fine: "", pausa: 0,
+        ore: round2(Math.min(tot, 8)), straordinari: round2(Math.max(0, tot - 8)),
+        cantiere: false, nome_cantiere: "", fonte: "admin",
+      };
+    });
     return [...logs, ...extra];
   }, [logs, detected]);
 
@@ -905,10 +909,14 @@ function AdminUsers({ users, reqs, logs, detected, selected, setSelected, cursor
     const uLogs = logs.filter(w=>w.user_id===u.id);
     const uDet = detected.filter(d=>d.user_id===u.id);
     const giorniLog = new Set(uLogs.map(l => iso(l.data)));
-    const uLogsVis = [...uLogs, ...uDet.filter(d => !giorniLog.has(iso(d.data))).map(d => ({
-      id: `det-${d.id}`, data: d.data, inizio: "", fine: "", pausa: 0, ore: d.ore, straordinari: 0,
-      cantiere: false, nome_cantiere: "", fonte: "admin", user_id: u.id,
-    }))];
+    const uLogsVis = [...uLogs, ...uDet.filter(d => !giorniLog.has(iso(d.data))).map(d => {
+      const tot = Number(d.ore) || 0;
+      return {
+        id: `det-${d.id}`, data: d.data, inizio: "", fine: "", pausa: 0,
+        ore: round2(Math.min(tot, 8)), straordinari: round2(Math.max(0, tot - 8)),
+        cantiere: false, nome_cantiere: "", fonte: "admin", user_id: u.id,
+      };
+    })];
     return (
       <div className="stack">
         <button className="btn ghost" onClick={()=>setSelected(null)}>← Tutti gli utenti</button>
