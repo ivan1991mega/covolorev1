@@ -664,6 +664,12 @@ app.delete("/api/users/:id", auth, adminOnly, async (req, res) => {
 //  EXPORT EXCEL (riepilogo mensile di tutti gli utenti, solo admin)
 // ============================================================
 // Converte in "YYYY-MM-DD" sia le stringhe sia gli oggetti Date restituiti da Postgres.
+function splitOre8(totale) {
+  const t = Math.round(Number(totale || 0) * 100) / 100;
+  const ore = Math.round(Math.min(t, 8) * 100) / 100;
+  const straordinari = Math.round(Math.max(0, t - 8) * 100) / 100;
+  return { ore, straordinari };
+}
 function toISO(v) {
   if (!v) return "";
   if (v instanceof Date) {
@@ -727,10 +733,13 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
       // Ore inserite dall'admin in "Rilevazione" per un giorno senza registrazione del dipendente.
       detected
         .filter(d => d.user_id === u.id && inMonth(d.data) && !giorni.has(toISO(d.data)))
-        .forEach(d => logs.push({
-          data: d.data, inizio: "", fine: "", pausa: 0, ore: d.ore, straordinari: 0,
-          cantiere: false, nome_cantiere: "", fonte: "admin",
-        }));
+        .forEach(d => {
+          const s = splitOre8(d.ore);
+          logs.push({
+            data: d.data, inizio: "", fine: "", pausa: 0, ore: s.ore, straordinari: s.straordinari,
+            cantiere: false, nome_cantiere: "", fonte: "admin",
+          });
+        });
       logs.sort((a, b) => toISO(a.data).localeCompare(toISO(b.data)) || String(a.inizio || "").localeCompare(String(b.inizio || "")));
       return { u, logs };
     });
@@ -873,9 +882,10 @@ app.get("/api/export-user/:userId", auth, adminOnly, async (req, res) => {
       row.getCell(6).numFmt = "@";
     });
     oreAdmin.forEach(d => {
+      const s = splitOre8(d.ore);
       const row = ws1.addRow({
         data: fmtD(d.data), inizio: "", fine: "", pausa: "",
-        ore: oreHM(d.ore), straord: oreHM(0),
+        ore: oreHM(s.ore), straord: oreHM(s.straordinari),
         cantiere: "No", nomecant: "Inserita dall'amministratore",
         creata: fmtDT(d.created_at), modificata: fmtDT(d.created_at),
       });
@@ -892,8 +902,8 @@ app.get("/api/export-user/:userId", auth, adminOnly, async (req, res) => {
       };
       const tot = ws1.addRow({
         data: "Totale mese",
-        ore: oreSomma(worklogs.reduce((s, w) => s + Number(w.ore || 0), 0) + oreAdmin.reduce((s, d) => s + Number(d.ore || 0), 0)),
-        straord: oreSomma(worklogs.reduce((s, w) => s + Number(w.straordinari || 0), 0)),
+        ore: oreSomma(worklogs.reduce((s, w) => s + Number(w.ore || 0), 0) + oreAdmin.reduce((s, d) => s + splitOre8(d.ore).ore, 0)),
+        straord: oreSomma(worklogs.reduce((s, w) => s + Number(w.straordinari || 0), 0) + oreAdmin.reduce((s, d) => s + splitOre8(d.ore).straordinari, 0)),
       });
       tot.font = { bold: true };
       tot.getCell(5).numFmt = "@";
