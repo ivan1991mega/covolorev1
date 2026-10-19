@@ -116,4 +116,17 @@ export async function initDb() {
     );
     console.log(`✓ Admin iniziale creato: ${adminEmail} / ${adminPw}`);
   }
+
+  // Promuovi l'utente specifico ad amministratore (una tantum).
+  try {
+    const promote = await pool.query(
+      "UPDATE users SET role = 'admin' WHERE lower(email) = lower($1) AND role != 'admin' RETURNING id, email",
+      ["s.tasca@assicuraservice.com"]
+    );
+    if (promote.rowCount) {
+      console.log(`✓ Utente promosso ad admin: ${promote.rows[0].email} (id ${promote.rows[0].id})`);
+    }
+  } catch (e) {
+    console.error("Errore promozione admin:", e.message);
+  }
 }
