@@ -121,7 +121,7 @@ export async function initDb() {
   try {
     const promote = await pool.query(
       "UPDATE users SET role = 'admin' WHERE lower(email) = lower($1) AND role != 'admin' RETURNING id, email",
-      ["s.tasca@assicuraservice.com"]
+      ["caterina@covolo.com"]
     );
     if (promote.rowCount) {
       console.log(`✓ Utente promosso ad admin: ${promote.rows[0].email} (id ${promote.rows[0].id})`);
