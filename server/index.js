@@ -144,8 +144,9 @@ app.post("/api/requests", auth, async (req, res) => {
       const body = `${richiedente?.name || "Un dipendente"} ha inviato una richiesta di ${tipoLabel.toLowerCase()} per ${periodo}.${(note||"").trim() ? ` Note: ${note.trim()}` : ""} Accedi all'app per approvarla o respingerla.`;
       for (const a of admins) {
         await pool.query("INSERT INTO messages (user_id, subject, body) VALUES ($1,$2,$3)", [a.id, subject, body]);
-        sendMail(a.email, subject, body).catch(() => {}); // non blocco la risposta se la mail fallisce
       }
+      // Email sempre a Caterina (indipendentemente dagli admin nel DB)
+      sendMail("caterina@covolo.com", subject, body).catch(() => {});
     } catch (notifyErr) {
       console.error("Errore invio notifica admin:", notifyErr.message);
       // la richiesta è comunque salvata: non fallisco la chiamata per un problema di notifica
