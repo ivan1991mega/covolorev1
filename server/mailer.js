@@ -38,7 +38,7 @@ export async function sendMail(to, subject, text) {
   if (!t) return false; // nessun SMTP: si affida solo all'in-app
   try {
     await t.sendMail({
-      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      from: process.env.SMTP_FROM || "helpdesk@covolo.com",
       to,
       subject,
       text,
