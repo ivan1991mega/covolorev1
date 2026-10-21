@@ -1,3 +1,13 @@
+
+function calcFromTimes(inizio, fine, pausaMin) {
+  if (!inizio || !fine || inizio >= fine) return { ore: 0, straordinari: 0 };
+  const [hi, mi] = inizio.split(":").map(Number);
+  const [hf, mf] = fine.split(":").map(Number);
+  let min = (hf*60+mf) - (hi*60+mi) - Number(pausaMin||0);
+  if (min < 0) min = 0;
+  const tot = min / 60;
+  return { ore: Math.round(Math.min(tot,8)*100)/100, straordinari: Math.round(Math.max(0,tot-8)*100)/100 };
+}
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { api, getToken, setToken, clearToken } from "./api.js";
 
@@ -568,9 +578,9 @@ function UserWorklogs({ logs, detected, reload }) {
         {f.modo==="unico" && (
           <div className="grid4">
             <label className="field"><span>Data (oggi)</span><input type="date" value={oggi} disabled /></label>
-            <label className="field"><span>Entrata</span><input type="time" value={f.inizio} onChange={e=>setF({...f,inizio:e.target.value})} /></label>
-            <label className="field"><span>Uscita</span><input type="time" value={f.fine} onChange={e=>setF({...f,fine:e.target.value})} /></label>
-            <label className="field"><span>Pausa (min)</span><input type="number" min="0" step="15" value={f.pausa} onChange={e=>setF({...f,pausa:e.target.value})} /></label>
+            <label className="field"><span>Entrata</span><input type="time" value={f.inizio} onChange={e=>{ const v=e.target.value; const c=calcFromTimes(v,f.fine,f.pausa); setF({...f,inizio:v, ore:String(c.ore), straordinari:String(c.straordinari)}); }} /></label>
+            <label className="field"><span>Uscita</span><input type="time" value={f.fine} onChange={e=>{ const v=e.target.value; const c=calcFromTimes(f.inizio,v,f.pausa); setF({...f,fine:v, ore:String(c.ore), straordinari:String(c.straordinari)}); }} /></label>
+            <label className="field"><span>Pausa (min)</span><input type="number" min="0" step="15" value={f.pausa} onChange={e=>{ const v=e.target.value; const c=calcFromTimes(f.inizio,f.fine,v); setF({...f,pausa:v, ore:String(c.ore), straordinari:String(c.straordinari)}); }} /></label>
           </div>
         )}
         {f.modo==="fasce" && (
