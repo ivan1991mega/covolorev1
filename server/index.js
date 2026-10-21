@@ -61,6 +61,28 @@ function isTodayItaly(v) {
   return d === todayItaly();
 }
 
+// Calcola ore normali e straordinari a partire da inizio/fine/pausa.
+// Se gli orari non sono validi, restituisce i valori passati.
+function calcolaOreStraord(inizio, fine, pausaMin, oreManuale, straordManuale) {
+  if (!inizio || !fine || inizio >= fine) {
+    const ore = Number(oreManuale || 0);
+    const straord = Number(straordManuale || 0);
+    return { ore: Math.round(ore*100)/100, straordinari: Math.round(straord*100)/100 };
+  }
+  const [hi, mi] = inizio.split(":").map(Number);
+  const [hf, mf] = fine.split(":").map(Number);
+  let minuti = (hf * 60 + mf) - (hi * 60 + mi) - Number(pausaMin || 0);
+  if (minuti < 0) minuti = 0;
+  const oreTotali = minuti / 60;
+  const oreNormali = Math.min(oreTotali, 8);
+  const straordinari = Math.max(0, oreTotali - 8);
+  return {
+    ore: Math.round(oreNormali * 100) / 100,
+    straordinari: Math.round(straordinari * 100) / 100
+  };
+}
+
+
 // ============================================================
 //  AUTENTICAZIONE
 // ============================================================
@@ -482,11 +504,12 @@ app.post("/api/worklogs", auth, async (req, res) => {
     if (already.rowCount) {
       return res.status(409).json({ error: "C'è già una registrazione per questa giornata. Modifica quella esistente." });
     }
+    const calc = calcolaOreStraord(inizio, fine, pausa, ore, straordinari);
     const { rows } = await pool.query(
       `INSERT INTO worklogs (user_id, data, inizio, fine, pausa, ore, straordinari, cantiere, nome_cantiere,
                              mattino_inizio, mattino_fine, pomeriggio_inizio, pomeriggio_fine)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
-      [targetId, data, inizio, fine, Number(pausa || 0), Number(ore), Number(straordinari || 0), !!cantiere, nomeCant,
+      [targetId, data, inizio, fine, Number(pausa || 0), calc.ore, calc.straordinari, !!cantiere, nomeCant,
        mattinoInizio || "", mattinoFine || "", pomeriggioInizio || "", pomeriggioFine || ""]
     );
     res.json(rows[0]);
@@ -522,11 +545,12 @@ app.put("/api/worklogs/:id", auth, async (req, res) => {
     if (clash.rowCount) {
       return res.status(409).json({ error: "In quel giorno c'è già un'altra registrazione." });
     }
+    const calc = calcolaOreStraord(inizio, fine, pausa, ore, straordinari);
     const { rows: upd } = await pool.query(
       `UPDATE worklogs SET data=$1, inizio=$2, fine=$3, pausa=$4, ore=$5, straordinari=$6, cantiere=$7, nome_cantiere=$8,
         mattino_inizio=$9, mattino_fine=$10, pomeriggio_inizio=$11, pomeriggio_fine=$12, updated_at=now()
        WHERE id=$13 RETURNING *`,
-      [data, inizio, fine, Number(pausa || 0), Number(ore), Number(straordinari || 0), !!cantiere,
+      [data, inizio, fine, Number(pausa || 0), calc.ore, calc.straordinari, !!cantiere,
        cantiere ? String(nomeCantiere || "").trim() : "",
        mattinoInizio || "", mattinoFine || "", pomeriggioInizio || "", pomeriggioFine || "", req.params.id]
     );
