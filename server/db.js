@@ -104,6 +104,9 @@ export async function initDb() {
     console.error("Indice univoco giornate non creato (ci sono registrazioni doppie):", e.message);
   }
 
+
+  // Migrazione: stato account (attivo / in_attesa / rifiutato). I vecchi account restano attivi.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS stato TEXT DEFAULT 'attivo';`);
   // Seed admin se il database è vuoto.
   const { rows } = await pool.query("SELECT COUNT(*)::int AS n FROM users");
   if (rows[0].n === 0) {
