@@ -75,10 +75,19 @@ app.post("/api/register", async (req, res) => {
     if (exists.rowCount) return res.status(409).json({ error: "Email già registrata." });
     const hash = await bcrypt.hash(password, 10);
     const { rows } = await pool.query(
-      "INSERT INTO users (name, email, pw_hash, role) VALUES ($1,$2,$3,'user') RETURNING id, name, email, role",
+      "INSERT INTO users (name, email, pw_hash, role, stato) VALUES ($1,$2,$3,'user','in_attesa') RETURNING id, name, email, role, stato",
       [name.trim(), email.trim(), hash]
     );
-    res.json({ token: sign(rows[0]), user: rows[0] });
+    // Notifica admin
+    try {
+      const admins = await pool.query("SELECT email FROM users WHERE role='admin'");
+      const subject = "Nuova registrazione in attesa di approvazione";
+      const body = `È arrivata una nuova registrazione:\n\nNome: ${name.trim()}\nEmail: ${email.trim()}\n\nAccedi all'area admin per approvare o rifiutare.`;
+      for (const a of admins.rows) {
+        await sendMail(a.email, subject, body);
+      }
+    } catch (e) { console.error("Notifica registrazione:", e.message); }
+    res.json({ pending: true, message: "Registrazione ricevuta. L'amministratore deve approvarla prima che tu possa accedere." });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Errore durante la registrazione." });
@@ -93,6 +102,11 @@ app.post("/api/login", async (req, res) => {
     if (!u) return res.status(401).json({ error: "Nessun account con questa email." });
     const ok = await bcrypt.compare(password || "", u.pw_hash);
     if (!ok) return res.status(401).json({ error: "Password errata." });
+    if (u.stato && u.stato !== "attivo") {
+      return res.status(403).json({ error: u.stato === "in_attesa" 
+        ? "Il tuo account è in attesa di approvazione da parte dell'amministratore." 
+        : "Il tuo account è stato rifiutato." });
+    }
     const safe = { id: u.id, name: u.name, email: u.email, role: u.role };
     res.json({ token: sign(safe), user: safe });
   } catch (e) {
@@ -686,6 +700,43 @@ app.delete("/api/users/:id", auth, adminOnly, async (req, res) => {
     console.error(e);
     res.status(500).json({ error: "Errore nell'eliminazione dell'utente." });
   }
+});
+
+
+// ============================================================
+//  APPROVAZIONE ACCOUNT (solo admin)
+// ============================================================
+app.get("/api/admin/pending-users", auth, adminOnly, async (req, res) => {
+  const { rows } = await pool.query(
+    "SELECT id, name, email, created_at FROM users WHERE stato = 'in_attesa' ORDER BY created_at DESC"
+  );
+  res.json(rows);
+});
+
+app.post("/api/admin/users/:id/approve", auth, adminOnly, async (req, res) => {
+  const { rows } = await pool.query(
+    "UPDATE users SET stato = 'attivo' WHERE id = $1 AND stato = 'in_attesa' RETURNING id, name, email",
+    [req.params.id]
+  );
+  if (!rows[0]) return res.status(404).json({ error: "Utente non trovato o già gestito." });
+  try {
+    await sendMail(rows[0].email, "Account approvato", 
+      `Ciao ${rows[0].name},\n\nil tuo account è stato approvato. Ora puoi accedere all'app.`);
+  } catch (e) { console.error(e.message); }
+  res.json({ ok: true, user: rows[0] });
+});
+
+app.post("/api/admin/users/:id/reject", auth, adminOnly, async (req, res) => {
+  const { rows } = await pool.query(
+    "UPDATE users SET stato = 'rifiutato' WHERE id = $1 AND stato = 'in_attesa' RETURNING id, name, email",
+    [req.params.id]
+  );
+  if (!rows[0]) return res.status(404).json({ error: "Utente non trovato o già gestito." });
+  try {
+    await sendMail(rows[0].email, "Account non approvato", 
+      `Ciao ${rows[0].name},\n\nla tua richiesta di registrazione non è stata approvata.`);
+  } catch (e) { console.error(e.message); }
+  res.json({ ok: true });
 });
 
 // ============================================================
