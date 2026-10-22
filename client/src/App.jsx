@@ -127,7 +127,14 @@ function Auth({ onLogin, theme, toggleTheme }) {
     setErr(""); setBusy(true);
     try {
       const payload = mode==="login" ? { email, password: pw } : { name, email, password: pw };
-      const { token, user } = await api.post(mode==="login" ? "/api/login" : "/api/register", payload);
+      const res = await api.post(mode==="login" ? "/api/login" : "/api/register", payload);
+      if (res.pending) {
+        setErr("");
+        alert(res.message || "Registrazione ricevuta. Attendi l'approvazione dell'amministratore.");
+        setMode("login");
+        return;
+      }
+      const { token, user } = res;
       setToken(token); onLogin(user);
     } catch (e) { setErr(e.message); }
     finally { setBusy(false); }
@@ -715,7 +722,7 @@ function AdminApp({ me, onLogout, theme, toggleTheme }) {
       <main className="main">
         {tab==="richieste" && <AdminRequests pending={pending} allReqs={reqs} decide={decide} removeRequest={removeRequest} users={users} setTab={setTab} />}
         {tab==="calendario" && <TeamCalendar reqs={reqs} cursor={cursor} setCursor={setCursor} />}
-        {tab==="utenti" && <AdminUsers users={users} reqs={reqs} logs={logs} detected={detected} selected={selected} setSelected={setSelected} cursor={cursor} setCursor={setCursor} reload={reload} />}
+        {tab==="utenti" && <><PendingUsers reload={reload} /><AdminUsers users={users} reqs={reqs} logs={logs} detected={detected} selected={selected} setSelected={setSelected} cursor={cursor} setCursor={setCursor} reload={reload} /></>}
         {tab==="rilevazioni" && <AdminDetected users={users} logs={logs} detected={detected} reload={reload} />}
       </main>
       <style>{CSS}</style>
@@ -910,6 +917,42 @@ function UserExportBox({ user }) {
   );
 }
 
+
+function PendingUsers({ reload }) {
+  const [pending, setPending] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const load = async () => {
+    try {
+      const list = await api.get("/api/admin/pending-users");
+      setPending(list);
+    } catch (e) { console.error(e); }
+  };
+  useEffect(() => { load(); }, []);
+  const act = async (id, action) => {
+    setBusy(true);
+    try {
+      await api.post(`/api/admin/users/${id}/${action}`);
+      await load();
+      if (reload) reload();
+    } catch (e) { alert(e.message); }
+    setBusy(false);
+  };
+  if (pending.length === 0) return null;
+  return (
+    <div className="card" style={{borderLeft:"4px solid #f59e0b", marginBottom:16}}>
+      <h3>Account in attesa di approvazione ({pending.length})</h3>
+      {pending.map(u => (
+        <div key={u.id} className="rowbetween" style={{padding:"8px 0", borderBottom:"1px solid #eee"}}>
+          <div><strong>{u.name}</strong><br/><span className="muted small">{u.email}</span></div>
+          <div>
+            <button className="btn primary tiny" disabled={busy} onClick={()=>act(u.id,"approve")}>Approva</button>
+            <button className="btn ghost tiny" disabled={busy} onClick={()=>act(u.id,"reject")} style={{marginLeft:8}}>Rifiuta</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 function AdminUsers({ users, reqs, logs, detected, selected, setSelected, cursor, setCursor, reload }) {
   const [showAdd, setShowAdd] = useState(false);
   if (selected) {
