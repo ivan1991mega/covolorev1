@@ -780,12 +780,12 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
       pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 },
     });
     ws.columns = [
-      { width: 14 }, { width: 12 }, { width: 12 }, { width: 12 }, { width: 14 }, { width: 16 }, { width: 16 }, { width: 28 },
+      { width: 14 }, { width: 12 }, { width: 12 }, { width: 12 }, { width: 14 }, { width: 16 }, { width: 16 }, { width: 16 }, { width: 16 }, { width: 28 },
     ];
     ws.mergeCells("A1:H1");
     ws.getCell("A1").value = `Ore giornaliere · ${titolo} · straordinari del giorno in minuti, totale in ore decimali per eccesso al quarto d'ora`;
     paintHeader(ws.getRow(1), "FF1F4E3D");
-    ["Data", "Giorno", "Inizio", "Fine", "Pausa (min)", "Ore lavorate", "Straordinari (min)", "Sede / cantiere"].forEach((h, i) => {
+    ["Data", "Giorno", "Inizio", "Fine", "Pausa (min)", "Ore lavorate", "Straordinari (min)", "Mattino", "Pomeriggio", "Sede / cantiere"].forEach((h, i) => {
       ws.getCell(2, i + 1).value = h;
     });
     paintHeader(ws.getRow(2), "FF3A7D6B");
@@ -793,7 +793,7 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
 
     people.forEach(({ u, logs }, i) => {
       const banner = ws.addRow([`${u.name}  ·  ${u.email}`]);
-      ws.mergeCells(banner.number, 1, banner.number, 8);
+      ws.mergeCells(banner.number, 1, banner.number, 10);
       paintHeader(banner, COLORS[i % COLORS.length]);
       banner.height = 24;
       if (logs.length === 0) {
@@ -806,9 +806,12 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
           const sede = w.fonte === "admin"
             ? "Inserita dall'amministratore"
             : (w.cantiere ? `Cantiere${w.nome_cantiere ? ": " + w.nome_cantiere : ""}` : "Sede");
+          const mattino = (w.mattino_inizio && w.mattino_fine) ? `${w.mattino_inizio}–${w.mattino_fine}` : "";
+          const pomeriggio = (w.pomeriggio_inizio && w.pomeriggio_fine) ? `${w.pomeriggio_inizio}–${w.pomeriggio_fine}` : "";
           const row = ws.addRow([
             fmtD(w.data), weekday(iso), w.inizio || "", w.fine || "",
-            Number(w.pausa || 0), oreHM(w.ore), Math.round(Number(w.straordinari || 0) * 60), sede,
+            Number(w.pausa || 0), oreHM(w.ore), Math.round(Number(w.straordinari || 0) * 60),
+            mattino, pomeriggio, sede,
           ]);
           asTime(row.getCell(6));
           row.getCell(7).numFmt = "0";
@@ -818,7 +821,7 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
           straord += Number(w.straordinari || 0);
         });
         const tot = ws.addRow([
-          "Totale mese", "", "", "", "", oreHM(ore), ceilQuarter(straord), `${logs.length} giornate`,
+          "Totale mese", "", "", "", "", oreHM(ore), ceilQuarter(straord), "", "", `${logs.length} giornate`,
         ]);
         tot.font = { bold: true };
         tot.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7F0EC" } };
