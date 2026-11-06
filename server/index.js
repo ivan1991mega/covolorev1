@@ -780,6 +780,57 @@ function allDaysOfMonth(year, month) {
   return days;
 }
 
+// ============================================================
+//  FESTIVITÀ ITALIANE + DOMENICHE (per conteggio ferie)
+// ============================================================
+function calculateEaster(year) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(year, month - 1, day);
+}
+
+function getItalianHolidays(year) {
+  const set = new Set();
+  const fixed = [
+    [1, 1], [1, 6], [4, 25], [5, 1], [6, 2],
+    [8, 15], [11, 1], [12, 8], [12, 25], [12, 26]
+  ];
+  if (year >= 2026) fixed.push([10, 4]); // San Francesco d'Assisi (dal 2026)
+  fixed.forEach(([m, d]) => {
+    set.add(`${year}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
+  });
+  const easter = calculateEaster(year);
+  const pasquetta = new Date(easter);
+  pasquetta.setDate(easter.getDate() + 1);
+  const y = pasquetta.getFullYear();
+  const mm = String(pasquetta.getMonth() + 1).padStart(2, "0");
+  const dd = String(pasquetta.getDate()).padStart(2, "0");
+  set.add(`${y}-${mm}-${dd}`);
+  return set;
+}
+
+function isSundayOrHoliday(isoDate) {
+  if (!isoDate) return false;
+  const [y, m, d] = isoDate.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  if (date.getDay() === 0) return true; // domenica
+  const holidays = getItalianHolidays(y);
+  return holidays.has(isoDate);
+}
+
+
 app.get("/api/export", auth, adminOnly, async (req, res) => {
   // parametri: ?year=2026&month=8  (month 1-12)
   const year = Number(req.query.year) || new Date().getFullYear();
@@ -891,8 +942,16 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
               permesso = r.mode === "giorni" ? "1" : (r.ora_inizio && r.ora_fine ? "Orario" : "1");
               if (r.mode === "giorni") totPermesso += 1;
             } else if (r.tipo === "ferie") {
-              ferie = r.mode === "giorni" ? "1" : "Orario";
-              if (r.mode === "giorni") totFerie += 1;
+              if (r.mode === "giorni") {
+                if (!isSundayOrHoliday(isoDay)) {
+                  ferie = "1";
+                  totFerie += 1;
+                } else {
+                  ferie = "Festivo";
+                }
+              } else {
+                ferie = "Orario";
+              }
             } else if (r.tipo === "assenza") {
               malattia = r.mode === "giorni" ? "1" : "Orario";
               if (r.mode === "giorni") totMalattia += 1;
