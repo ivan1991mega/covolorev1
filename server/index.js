@@ -832,7 +832,7 @@ function isSundayOrHoliday(isoDate) {
 
 
 
-function hoursBetween(oraInizio, oraFine) {
+function oreTraOrari(oraInizio, oraFine) {
   if (!oraInizio || !oraFine) return 0;
   const [hi, mi] = oraInizio.split(":").map(Number);
   const [hf, mf] = oraFine.split(":").map(Number);
@@ -968,7 +968,7 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
               if (r.mode === "giorni") {
                 oreAssenza = 8;
               } else if (r.ora_inizio && r.ora_fine) {
-                oreAssenza = hoursBetween(r.ora_inizio, r.ora_fine);
+                oreAssenza = oreTraOrari(r.ora_inizio, r.ora_fine);
               }
               malattia = oreAssenza > 0 ? oreAssenza : "";
               totMalattia += oreAssenza;
