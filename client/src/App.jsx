@@ -23,6 +23,7 @@ const TIPI = {
   permesso: { label: "Permesso",     color: "#b3701c", bg: "#f7ecd9", short: "P" },
   ferie:    { label: "Ferie",        color: "#2b5f8a", bg: "#e0ebf4", short: "F" },
   assenza:  { label: "Assenza",      color: "#9a3b3b", bg: "#f4e3e3", short: "A" },
+  malattia: { label: "Malattia",     color: "#7a2e2e", bg: "#f8d7d7", short: "M" },
 };
 const STATI = {
   in_attesa: { label: "In attesa", color: "#b3701c", bg: "#f7ecd9" },
@@ -304,7 +305,7 @@ function UserRequests({ me, reqs, reload, openReq, clearOpenReq }) {
           <div className="grid2">
             <label className="field"><span>Tipo</span>
               <select value={form.tipo} onChange={e=>setForm({...form,tipo:e.target.value})}>
-                <option value="permesso">Permesso</option><option value="ferie">Ferie</option><option value="assenza">Assenza</option>
+                <option value="permesso">Permesso</option><option value="ferie">Ferie</option><option value="assenza">Assenza</option><option value="malattia">Malattia</option>
               </select></label>
             <label className="field"><span>Base</span>
               <select value={form.mode} onChange={e=>setForm({...form,mode:e.target.value})}>
@@ -1725,3 +1726,4 @@ h3{ font-size:16px; margin:0 0 10px; }
 .modalhead{ display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
 .modalhead h3{ margin:0; }
 `;
+
