@@ -831,6 +831,16 @@ function isSundayOrHoliday(isoDate) {
 }
 
 
+
+function hoursBetween(oraInizio, oraFine) {
+  if (!oraInizio || !oraFine) return 0;
+  const [hi, mi] = oraInizio.split(":").map(Number);
+  const [hf, mf] = oraFine.split(":").map(Number);
+  let min = (hf * 60 + mf) - (hi * 60 + mi);
+  if (min < 0) min = 0;
+  return Math.round((min / 60) * 100) / 100;
+}
+
 app.get("/api/export", auth, adminOnly, async (req, res) => {
   // parametri: ?year=2026&month=8  (month 1-12)
   const year = Number(req.query.year) || new Date().getFullYear();
@@ -939,7 +949,7 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
           const giorniReq = eachDayISO(r.data_inizio, r.data_fine);
           if (giorniReq.includes(isoDay)) {
             if (r.tipo === "permesso") {
-              permesso = r.mode === "giorni" ? "1" : (r.ora_inizio && r.ora_fine ? "Orario" : "1");
+              permesso = r.mode === "giorni" ? "1" : "Orario";
               if (r.mode === "giorni") totPermesso += 1;
             } else if (r.tipo === "ferie") {
               if (r.mode === "giorni") {
@@ -952,13 +962,16 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
               } else {
                 ferie = "Orario";
               }
-            } else if (r.tipo === "malattia") {
-              malattia = r.mode === "giorni" ? "1" : "Orario";
-              if (r.mode === "giorni") totMalattia += 1;
-            } else if (r.tipo === "assenza") {
-              // Assenza generica (non malattia)
-              malattia = r.mode === "giorni" ? "A" : "Orario";
-              if (r.mode === "giorni") totMalattia += 1;
+            } else if (r.tipo === "malattia" || r.tipo === "assenza") {
+              // Malattia e Assenza: ore (8h se giornata intera, ore calcolate se oraria)
+              let oreAssenza = 0;
+              if (r.mode === "giorni") {
+                oreAssenza = 8;
+              } else if (r.ora_inizio && r.ora_fine) {
+                oreAssenza = hoursBetween(r.ora_inizio, r.ora_fine);
+              }
+              malattia = oreAssenza > 0 ? oreAssenza : "";
+              totMalattia += oreAssenza;
             }
             break; // una sola richiesta per giorno (la prima)
           }
@@ -981,6 +994,7 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
         ]);
 
         asDecimal(row.getCell(6)); // Ore in decimali (0.00 → virgola in Excel IT)
+        if (typeof malattia === "number" && malattia > 0) asDecimal(row.getCell(13));
         row.getCell(7).numFmt = "0";
         row.getCell(7).alignment = { horizontal: "center" };
         if (straordMin > 0) row.getCell(7).font = { bold: true, color: { argb: "FF8A5410" } };
@@ -997,7 +1011,7 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
         "", "", "",
         totPermesso || "",
         totFerie || "",
-        totMalattia || "",
+        totMalattia ? Math.round(totMalattia * 100) / 100 : "",
       ]);
       tot.font = { bold: true };
       tot.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7F0EC" } };
