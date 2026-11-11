@@ -907,16 +907,16 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
       views: [{ state: "frozen", ySplit: 2 }],
       pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 },
     });
-    // Colonne: Data, Giorno, Inizio, Fine, Pausa, Ore (decimali), Straordinari (min), Mattino, Pomeriggio, Sede, Permesso, Ferie, Malattia
+    // Colonne: Data, Giorno, Inizio, Fine, Pausa, Ore (decimali), Straordinari (min), Mattino, Pomeriggio, Sede, Permesso, Ferie, Malattia, Assenza
     ws.columns = [
       { width: 12 }, { width: 10 }, { width: 10 }, { width: 10 }, { width: 12 },
       { width: 14 }, { width: 16 }, { width: 14 }, { width: 14 }, { width: 24 },
-      { width: 12 }, { width: 12 }, { width: 14 },
+      { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 },
     ];
-    ws.mergeCells("A1:M1");
-    ws.getCell("A1").value = `Riepilogo giornaliero · ${titolo} · Ore in decimali · Tutti i giorni del mese · gg Permesso / Ferie / Malattia`;
+    ws.mergeCells("A1:N1");
+    ws.getCell("A1").value = `Riepilogo giornaliero · ${titolo} · Ore in decimali · Tutti i giorni del mese · Permesso / Ferie / Malattia / Assenza`;
     paintHeader(ws.getRow(1), "FF1F4E3D");
-    ["Data", "Giorno", "Inizio", "Fine", "Pausa (min)", "Ore lavorate", "Straordinari (min)", "Mattino", "Pomeriggio", "Sede / cantiere", "Permesso", "Ferie", "Malattia"].forEach((h, i) => {
+    ["Data", "Giorno", "Inizio", "Fine", "Pausa (min)", "Ore lavorate", "Straordinari (min)", "Mattino", "Pomeriggio", "Sede / cantiere", "Permesso", "Ferie", "Malattia", "Assenza"].forEach((h, i) => {
       ws.getCell(2, i + 1).value = h;
     });
     paintHeader(ws.getRow(2), "FF3A7D6B");
@@ -924,11 +924,11 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
 
     people.forEach(({ u, logsMap, userReqs }, i) => {
       const banner = ws.addRow([`${u.name}  ·  ${u.email}`]);
-      ws.mergeCells(banner.number, 1, banner.number, 13);
+      ws.mergeCells(banner.number, 1, banner.number, 14);
       paintHeader(banner, COLORS[i % COLORS.length]);
       banner.height = 24;
 
-      let totOre = 0, totStraord = 0, totPermesso = 0, totFerie = 0, totMalattia = 0;
+      let totOre = 0, totStraord = 0, totPermesso = 0, totFerie = 0, totMalattia = 0, totAssenza = 0;
 
       calendarDays.forEach(isoDay => {
         const w = logsMap.get(isoDay);
@@ -944,15 +944,19 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
         const straordMin = w ? Math.round(Number(w.straordinari || 0) * 60) : 0;
 
         // Controlla richieste approvate che coprono questo giorno
-        let permesso = "", ferie = "", malattia = "";
+        let permesso = "", ferie = "", malattia = "", assenza = "";
         for (const r of userReqs) {
           const giorniReq = eachDayISO(r.data_inizio, r.data_fine);
           if (giorniReq.includes(isoDay)) {
+            const isGiorni = r.mode === "giorni";
+            const oreOrarie = (!isGiorni && r.ora_inizio && r.ora_fine) ? oreTraOrari(r.ora_inizio, r.ora_fine) : 0;
+            const labelOrario = oreOrarie > 0 ? `Orario ${oreOrarie.toFixed(2).replace(".", ",")}` : "Orario";
+
             if (r.tipo === "permesso") {
-              permesso = r.mode === "giorni" ? "1" : "Orario";
-              if (r.mode === "giorni") totPermesso += 1;
+              permesso = isGiorni ? "1" : labelOrario;
+              if (isGiorni) totPermesso += 1;
             } else if (r.tipo === "ferie") {
-              if (r.mode === "giorni") {
+              if (isGiorni) {
                 if (!isSundayOrHoliday(isoDay)) {
                   ferie = "1";
                   totFerie += 1;
@@ -960,20 +964,16 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
                   ferie = "Festivo";
                 }
               } else {
-                ferie = "Orario";
+                ferie = labelOrario;
               }
-            } else if (r.tipo === "malattia" || r.tipo === "assenza") {
-              // Malattia e Assenza: ore (8h se giornata intera, ore calcolate se oraria)
-              let oreAssenza = 0;
-              if (r.mode === "giorni") {
-                oreAssenza = 8;
-              } else if (r.ora_inizio && r.ora_fine) {
-                oreAssenza = oreTraOrari(r.ora_inizio, r.ora_fine);
-              }
-              malattia = oreAssenza > 0 ? oreAssenza : "";
-              totMalattia += oreAssenza;
+            } else if (r.tipo === "malattia") {
+              malattia = isGiorni ? "1" : labelOrario;
+              if (isGiorni) totMalattia += 1;
+            } else if (r.tipo === "assenza") {
+              assenza = isGiorni ? "1" : labelOrario;
+              if (isGiorni) totAssenza += 1;
             }
-            break; // una sola richiesta per giorno (la prima)
+            break;
           }
         }
 
@@ -991,10 +991,10 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
           permesso,
           ferie,
           malattia,
+          assenza,
         ]);
 
         asDecimal(row.getCell(6)); // Ore in decimali (0.00 → virgola in Excel IT)
-        if (typeof malattia === "number" && malattia > 0) asDecimal(row.getCell(13));
         row.getCell(7).numFmt = "0";
         row.getCell(7).alignment = { horizontal: "center" };
         if (straordMin > 0) row.getCell(7).font = { bold: true, color: { argb: "FF8A5410" } };
@@ -1011,7 +1011,8 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
         "", "", "",
         totPermesso || "",
         totFerie || "",
-        totMalattia ? Math.round(totMalattia * 100) / 100 : "",
+        totMalattia || "",
+        totAssenza || "",
       ]);
       tot.font = { bold: true };
       tot.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7F0EC" } };
@@ -1225,4 +1226,5 @@ initDb()
     console.error("Errore inizializzazione DB:", e);
     process.exit(1);
   });
+
 
