@@ -133,7 +133,7 @@ app.get("/api/requests", auth, async (req, res) => {
 
 app.post("/api/requests", auth, async (req, res) => {
   const { tipo, mode, dataInizio, dataFine, oraInizio, oraFine, note } = req.body;
-  if (!["permesso", "ferie", "assenza"].includes(tipo)) return res.status(400).json({ error: "Tipo non valido." });
+  if (!["permesso", "ferie", "assenza", "malattia"].includes(tipo)) return res.status(400).json({ error: "Tipo non valido." });
   if (!["ore", "giorni"].includes(mode)) return res.status(400).json({ error: "Modalità non valida." });
   const df = mode === "giorni" ? dataFine : dataInizio;
   try {
@@ -148,7 +148,7 @@ app.post("/api/requests", auth, async (req, res) => {
     try {
       const admins = (await pool.query("SELECT id, email FROM users WHERE role='admin'")).rows;
       const richiedente = (await pool.query("SELECT name FROM users WHERE id=$1", [req.user.id])).rows[0];
-      const tipoLabel = { permesso: "Permesso", ferie: "Ferie", assenza: "Assenza" }[tipo];
+      const tipoLabel = { permesso: "Permesso", ferie: "Ferie", assenza: "Assenza", malattia: "Malattia" }[tipo];
       const periodo = mode === "ore"
         ? `${String(dataInizio).slice(0,10)} (${oraInizio}-${oraFine})`
         : (String(dataInizio).slice(0,10) === String(df).slice(0,10)
@@ -227,7 +227,7 @@ app.post("/api/requests/:id/decide", auth, adminOnly, async (req, res) => {
 
     const { rows: us } = await pool.query("SELECT name, email FROM users WHERE id=$1", [r.user_id]);
     const u = us[0];
-    const tipoLabel = { permesso: "Permesso", ferie: "Ferie", assenza: "Assenza" }[r.tipo];
+    const tipoLabel = { permesso: "Permesso", ferie: "Ferie", assenza: "Assenza", malattia: "Malattia" }[r.tipo];
     const esito = { approvata: "APPROVATA", respinta: "RESPINTA", in_attesa: "rimessa IN ATTESA" }[stato];
     const subject = `Aggiornamento richiesta ${tipoLabel}`;
     const body = `Ciao ${u.name}, la tua richiesta di ${tipoLabel.toLowerCase()} del ${String(r.data_inizio).slice(0,10)} è stata ${esito}.`;
@@ -952,8 +952,12 @@ app.get("/api/export", auth, adminOnly, async (req, res) => {
               } else {
                 ferie = "Orario";
               }
-            } else if (r.tipo === "assenza") {
+            } else if (r.tipo === "malattia") {
               malattia = r.mode === "giorni" ? "1" : "Orario";
+              if (r.mode === "giorni") totMalattia += 1;
+            } else if (r.tipo === "assenza") {
+              // Assenza generica (non malattia)
+              malattia = r.mode === "giorni" ? "A" : "Orario";
               if (r.mode === "giorni") totMalattia += 1;
             }
             break; // una sola richiesta per giorno (la prima)
@@ -1123,7 +1127,7 @@ app.get("/api/export-user/:userId", auth, adminOnly, async (req, res) => {
       { header: "Esito", key: "esito", width: 14 },
     ];
     headStyle(ws2.getRow(1));
-    const tipoLabel = { permesso: "Permesso", ferie: "Ferie", assenza: "Assenza" };
+    const tipoLabel = { permesso: "Permesso", ferie: "Ferie", assenza: "Assenza", malattia: "Malattia" };
     const statoLabel = { in_attesa: "In attesa", approvata: "Approvata", respinta: "Respinta" };
     requests.forEach(r => {
       const dal = r.mode === "ore" ? `${fmtD(r.data_inizio)} ${r.ora_inizio}-${r.ora_fine}` : fmtD(r.data_inizio);
@@ -1207,3 +1211,4 @@ initDb()
     console.error("Errore inizializzazione DB:", e);
     process.exit(1);
   });
+
